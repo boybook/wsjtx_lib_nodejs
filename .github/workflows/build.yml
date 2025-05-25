@@ -30,7 +30,7 @@ jobs:
             node_arch: arm64
             cmake_arch: arm64
           
-          # Windows builds
+          # Windows builds with MSVC
           - os: windows-latest
             arch: x64
             node_arch: x64
@@ -106,7 +106,7 @@ jobs:
           echo "Checking gfortran installation..."
           ls -la ${BREW_PREFIX}/bin/gfortran* || echo "gfortran not found"
           
-          # 找到正确的gfortran路径
+          # 找到正确的gfortran路径并设置为环境变量
           GFORTRAN_PATH=$(find ${BREW_PREFIX}/bin -name "gfortran*" | head -1)
           if [ -n "$GFORTRAN_PATH" ] && [ -x "$GFORTRAN_PATH" ]; then
             echo "Found gfortran at: $GFORTRAN_PATH"
@@ -124,42 +124,31 @@ jobs:
           echo "LIBRARY_PATH=${BREW_PREFIX}/lib:$LIBRARY_PATH" >> $GITHUB_ENV
           echo "LD_LIBRARY_PATH=${BREW_PREFIX}/lib:$LD_LIBRARY_PATH" >> $GITHUB_ENV
 
-      # 3. 安装系统依赖 - Windows
-      - name: Setup MSYS2 for Windows build
+      # 3. Windows MSVC 环境设置
+      - name: Setup Visual Studio Build Tools
         if: runner.os == 'Windows'
-        uses: msys2/setup-msys2@v2
-        with:
-          msystem: MINGW64
-          update: true
-          path-type: inherit
-          install: >-
-            mingw-w64-x86_64-gcc
-            mingw-w64-x86_64-gcc-fortran
-            mingw-w64-x86_64-cmake
-            mingw-w64-x86_64-ninja
-            mingw-w64-x86_64-pkg-config
-            mingw-w64-x86_64-fftw
-            mingw-w64-x86_64-boost
+        uses: microsoft/setup-msbuild@v1
 
-      - name: Setup Windows environment
+      - name: Setup vcpkg & install FFTW3
         if: runner.os == 'Windows'
-        shell: msys2 {0}
         run: |
-          echo "/c/msys64/mingw64/bin" >> $GITHUB_PATH
-          echo "Verifying pkg-config installation..."
-          which pkg-config || (echo "pkg-config not found, reinstalling..." && pacman -S --noconfirm mingw-w64-x86_64-pkg-config)
-          pkg-config --version || (echo "Unable to run pkg-config, reinstalling..." && pacman -S --noconfirm mingw-w64-x86_64-pkg-config)
+          git clone https://github.com/Microsoft/vcpkg.git
+          .\vcpkg\bootstrap-vcpkg.bat
           
-          echo "CC=gcc" >> $GITHUB_ENV
-          echo "CXX=g++" >> $GITHUB_ENV
-          echo "FC=gfortran" >> $GITHUB_ENV
-          echo "CMAKE_Fortran_COMPILER=gfortran" >> $GITHUB_ENV
-          echo "CMAKE_GENERATOR=MinGW Makefiles" >> $GITHUB_ENV
-      
-          gcc --version
-          g++ --version
-          gfortran --version
-          cmake --version
+          # 使用经典模式安装依赖包 (fftw3包含所有精度版本)
+          .\vcpkg\vcpkg install fftw3:x64-windows boost:x64-windows
+          
+          # 设置vcpkg环境变量
+          echo "VCPKG_ROOT=${{ github.workspace }}\vcpkg" >> $env:GITHUB_ENV
+          echo "CMAKE_TOOLCHAIN_FILE=${{ github.workspace }}\vcpkg\scripts\buildsystems\vcpkg.cmake" >> $env:GITHUB_ENV
+        shell: powershell
+
+      - name: Setup Intel Fortran
+        if: runner.os == 'Windows'
+        uses: fortran-lang/setup-fortran@v1
+        with:
+          compiler: intel-classic
+          version: '2021.10'
 
       # 4. 安装 npm 依赖
       - name: Install npm dependencies
@@ -173,6 +162,9 @@ jobs:
       - name: Build native module (Linux/macOS)
         if: runner.os != 'Windows'
         run: |
+          # 清理可能存在的CMake缓存
+          rm -rf build/
+          
           if [ "${{ matrix.arch }}" = "arm64" ] && [ "${{ runner.os }}" = "Linux" ]; then
             # Linux ARM64 交叉编译
             npx cmake-js compile --arch=${{ matrix.cmake_arch }} \
@@ -186,35 +178,20 @@ jobs:
             npx cmake-js compile --arch=${{ matrix.cmake_arch }}
           fi
 
-      # 6. 构建原生模块 - Windows
-      - name: Build native module (Windows)
+      # 6. 构建原生模块 - Windows MSVC
+      - name: Build native module (Windows MSVC)
         if: runner.os == 'Windows'
-        shell: msys2 {0}
         run: |
-          echo "--- Checking Node.js and npx in MSYS2 (with path-type: inherit) ---"
-          echo "PATH: $PATH"
+          echo "--- Building with MSVC toolchain ---"
+          if (Test-Path "build") { Remove-Item -Recurse -Force "build" }
           
-          echo "which node:"
-          which node || echo "node not found"
-          echo "node --version:"
-          node --version || echo "node not runnable"
-          
-          echo "which npx:"
-          which npx || echo "npx not found"
-          echo "npx --version:"
-          npx --version || echo "npx not runnable"
-          
-          echo "Attempting to run npx cmake-js compile..."
-          npx cmake-js compile --arch=${{ matrix.cmake_arch }} \
-            -G "MinGW Makefiles" \
-            --CDCMAKE_C_COMPILER=gcc \
-            --CDCMAKE_CXX_COMPILER=g++ \
-            --CDCMAKE_Fortran_COMPILER=gfortran \
-            --CDCMAKE_SHARED_LINKER_FLAGS='' \
-            --CDCMAKE_MODULE_LINKER_FLAGS='' \
-            --CDCMAKE_EXE_LINKER_FLAGS='' \
-            --CDCMAKE_JS_SRC='' \
+          npx cmake-js compile --arch=${{ matrix.cmake_arch }} `
+            -G "Visual Studio 17 2022" -A x64 `
+            --CDCMAKE_TOOLCHAIN_FILE="$env:CMAKE_TOOLCHAIN_FILE" `
+            --CDVCPKG_MANIFEST_MODE=OFF `
+            --CDVCPKG_MANIFEST_INSTALL=OFF `
             --verbose
+        shell: powershell
 
       # 7. 运行测试
       - name: Run tests
@@ -241,6 +218,7 @@ jobs:
             echo "❌ Basic test file not found!"
             exit 1
           fi
+        shell: bash
 
       # 8. 创建预构建二进制文件
       - name: Create prebuilt binaries

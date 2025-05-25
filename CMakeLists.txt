@@ -1,5 +1,20 @@
 cmake_minimum_required(VERSION 3.15)
-project(wsjtx_lib_nodejs)
+
+# 禁用 vcpkg Manifest 模式，使用经典模式
+if(DEFINED CMAKE_TOOLCHAIN_FILE AND CMAKE_TOOLCHAIN_FILE MATCHES "vcpkg")
+    set(VCPKG_MANIFEST_MODE OFF CACHE BOOL "Disable vcpkg manifest mode" FORCE)
+    set(VCPKG_MANIFEST_INSTALL OFF CACHE BOOL "Disable vcpkg manifest install" FORCE)
+    message(STATUS "Detected vcpkg toolchain, disabling manifest mode")
+endif()
+
+project(wsjtx_lib_nodejs LANGUAGES C CXX Fortran)
+
+# Use MSVC on Windows by default, else keep existing
+if(MSVC)
+    message(STATUS "Using MSVC toolchain on Windows")
+    # Enable Fortran support via Intel oneAPI if available
+    # vcpkg toolchain file should be passed to CMake invocation
+endif()
 
 # Set C++ standard
 set(CMAKE_CXX_STANDARD 17)
@@ -38,7 +53,9 @@ elseif(APPLE)
 endif()
 
 # Include cmake-js
-include_directories(${CMAKE_JS_INC})
+if(CMAKE_JS_INC)
+    include_directories(${CMAKE_JS_INC})
+endif()
 
 # Add Node.js include path for node_api.h
 execute_process(
@@ -49,7 +66,29 @@ execute_process(
 include_directories(${NODE_INCLUDE_DIR})
 
 # Platform-specific package finding
-if(WIN32)
+if(WIN32 AND MSVC)
+    # Windows with MSVC: Use vcpkg for FFTW3
+    find_package(FFTW3 CONFIG REQUIRED)
+    
+    # Set CMake policy for newer Boost versions
+    if(POLICY CMP0167)
+        cmake_policy(SET CMP0167 NEW)
+    endif()
+    
+    # Find Boost
+    find_package(Boost QUIET)
+    if(Boost_FOUND)
+        message(STATUS "Boost found: ${Boost_VERSION}")
+        set(BOOST_LIBRARIES ${Boost_LIBRARIES})
+    else()
+        message(WARNING "Boost not found via find_package, continuing...")
+        set(BOOST_LIBRARIES "")
+    endif()
+    
+    # MSVC doesn't need separate threads library for FFTW
+    set(FFTW_HAS_THREADS FALSE)
+    set(FFTW_THREADS_LIBRARIES "")
+elseif(WIN32)
     # Windows with MSYS2: Use pkg-config like Unix systems
     find_package(PkgConfig REQUIRED)
     
@@ -111,19 +150,33 @@ else()
 endif()
 
 # Include directories
-include_directories(
-    ${CMAKE_SOURCE_DIR}/wsjtx_lib
-    ${CMAKE_SOURCE_DIR}/native
-    ${CMAKE_SOURCE_DIR}/node_modules/node-addon-api
-    ${FFTW3F_INCLUDE_DIRS}
-    ${Boost_INCLUDE_DIRS}
-)
+if(WIN32 AND MSVC)
+    include_directories(
+        ${CMAKE_SOURCE_DIR}/wsjtx_lib
+        ${CMAKE_SOURCE_DIR}/native
+        ${CMAKE_SOURCE_DIR}/node_modules/node-addon-api
+    )
+else()
+    include_directories(
+        ${CMAKE_SOURCE_DIR}/wsjtx_lib
+        ${CMAKE_SOURCE_DIR}/native
+        ${CMAKE_SOURCE_DIR}/node_modules/node-addon-api
+        ${FFTW3F_INCLUDE_DIRS}
+        ${Boost_INCLUDE_DIRS}
+    )
+endif()
 
 # Define LIBRARIES_FROM_REFERENCES for wsjtx_lib submodule
-set(LIBRARIES_FROM_REFERENCES 
-    ${FFTW3F_LIBRARIES}
-    ${FFTW_THREADS_LIBRARIES}
-)
+if(WIN32 AND MSVC)
+    set(LIBRARIES_FROM_REFERENCES 
+        FFTW3::fftw3
+    )
+else()
+    set(LIBRARIES_FROM_REFERENCES 
+        ${FFTW3F_LIBRARIES}
+        ${FFTW_THREADS_LIBRARIES}
+    )
+endif()
 
 # Platform-specific library setup
 if(APPLE)
@@ -150,10 +203,7 @@ if(APPLE)
     if(GFORTRAN_EXECUTABLE)
         message(STATUS "Found gfortran: ${GFORTRAN_EXECUTABLE}")
         
-        # Set the Fortran compiler for the project
-        set(CMAKE_Fortran_COMPILER ${GFORTRAN_EXECUTABLE})
-        
-        # Get library path
+        # Get library path (but don't set CMAKE_Fortran_COMPILER here to avoid cache conflicts)
         execute_process(
             COMMAND ${GFORTRAN_EXECUTABLE} --print-file-name=libgfortran.dylib
             OUTPUT_VARIABLE GFORTRAN_LIB_PATH
@@ -203,7 +253,7 @@ elseif(UNIX)
     if(FFTW_HAS_THREADS)
         list(APPEND LIBRARIES_FROM_REFERENCES fftw3f_threads)
     endif()
-elseif(WIN32)
+elseif(WIN32 AND NOT MSVC)
     # Windows specific libraries - MSYS2/MinGW environment
     list(APPEND LIBRARIES_FROM_REFERENCES 
         gfortran 
@@ -216,8 +266,10 @@ endif()
 add_subdirectory(wsjtx_lib)
 
 # Link directories (must be before creating target)
-if(NOT WIN32)
-    link_directories(${FFTW3F_LIBRARY_DIRS})
+if(NOT WIN32 OR NOT MSVC)
+    if(NOT WIN32)
+        link_directories(${FFTW3F_LIBRARY_DIRS})
+    endif()
 endif()
 
 # Source files for the Node.js addon
@@ -231,7 +283,7 @@ if(MINGW)
         # Exclude CMAKE_JS_SRC for MinGW
     )
 else()
-    # For other platforms (or if not MINGW, though cmake-js might handle this differently)
+    # For other platforms (MSVC, Linux, macOS)
     add_library(${PROJECT_NAME} SHARED 
         ${NATIVE_SOURCES}
         ${CMAKE_JS_SRC}
@@ -247,7 +299,9 @@ set_target_properties(${PROJECT_NAME} PROPERTIES
 )
 
 # Set Node.js addon include directories
-target_include_directories(${PROJECT_NAME} PRIVATE ${CMAKE_JS_INC})
+if(CMAKE_JS_INC)
+    target_include_directories(${PROJECT_NAME} PRIVATE ${CMAKE_JS_INC})
+endif()
 
 # Compiler-specific options
 target_compile_definitions(${PROJECT_NAME} PRIVATE 
@@ -256,8 +310,10 @@ target_compile_definitions(${PROJECT_NAME} PRIVATE
 )
 
 # Add compile flags
-if(NOT WIN32)
-    target_compile_options(${PROJECT_NAME} PRIVATE ${FFTW3F_CFLAGS_OTHER})
+if(NOT WIN32 OR NOT MSVC)
+    if(NOT WIN32)
+        target_compile_options(${PROJECT_NAME} PRIVATE ${FFTW3F_CFLAGS_OTHER})
+    endif()
 endif()
 
 # Link libraries
@@ -266,6 +322,16 @@ if(MINGW)
     target_link_libraries(${PROJECT_NAME} 
         wsjtx_lib
         # Potentially add -lnode or the path to libnode.dll.a if needed
+    )
+elseif(WIN32 AND MSVC)
+    # MSVC linking
+    if(CMAKE_JS_LIB)
+        target_link_libraries(${PROJECT_NAME} PRIVATE ${CMAKE_JS_LIB})
+    endif()
+    target_link_libraries(${PROJECT_NAME} PRIVATE
+        wsjtx_lib
+        FFTW3::fftw3
+        ${BOOST_LIBRARIES}
     )
 else()
     target_link_libraries(${PROJECT_NAME} 
@@ -304,7 +370,7 @@ elseif(UNIX)
     target_link_options(${PROJECT_NAME} PRIVATE 
         -Wl,--as-needed
     )
-elseif(WIN32)
+elseif(WIN32 AND NOT MSVC)
     # Windows linking - MSYS2/MinGW environment
     target_link_libraries(${PROJECT_NAME} 
         ${FFTW3F_LIBRARIES}
