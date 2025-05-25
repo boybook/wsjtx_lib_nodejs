@@ -5,6 +5,38 @@ project(wsjtx_lib_nodejs)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# Enable position independent code for all targets (including subprojects)
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+
+# Set compiler flags for better compatibility
+if(UNIX AND NOT APPLE)
+    # Linux specific flags
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fPIC -fvisibility=hidden")
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fPIC")
+    set(CMAKE_Fortran_FLAGS "${CMAKE_Fortran_FLAGS} -fPIC")
+    
+    # Suppress some warnings that are common in the wsjtx_lib code
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-stringop-overflow -Wno-deprecated-declarations")
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wno-stringop-overflow -Wno-deprecated-declarations")
+    
+    # Force PIC for all targets in subdirectories
+    set(CMAKE_POSITION_INDEPENDENT_CODE ON CACHE BOOL "Build position independent code" FORCE)
+    
+    # Additional flags to ensure PIC compilation
+    add_compile_options(-fPIC)
+    set(CMAKE_SHARED_LIBRARY_CXX_FLAGS "${CMAKE_SHARED_LIBRARY_CXX_FLAGS} -fPIC")
+    set(CMAKE_SHARED_LIBRARY_C_FLAGS "${CMAKE_SHARED_LIBRARY_C_FLAGS} -fPIC")
+elseif(APPLE)
+    # macOS specific flags
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fvisibility=hidden")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-deprecated-declarations -Wno-unqualified-std-cast-call")
+    
+    # Set CMake policy for newer Boost versions
+    if(POLICY CMP0167)
+        cmake_policy(SET CMP0167 NEW)
+    endif()
+endif()
+
 # Include cmake-js
 include_directories(${CMAKE_JS_INC})
 
@@ -16,28 +48,66 @@ execute_process(
 )
 include_directories(${NODE_INCLUDE_DIR})
 
-# Find required packages
-find_package(PkgConfig REQUIRED)
-find_package(Boost REQUIRED)
-
-# Find FFTW3
-pkg_check_modules(FFTW3F REQUIRED fftw3f)
-
-# Manually check for FFTW3 threads support since pkg-config may not find it
-find_library(FFTW3F_THREADS_LIB 
-    NAMES fftw3f_threads libfftw3f_threads
-    PATHS /opt/homebrew/lib /usr/local/lib
-    NO_DEFAULT_PATH
-)
-
-if(FFTW3F_THREADS_LIB)
-    message(STATUS "FFTW3 with threads support found: ${FFTW3F_THREADS_LIB}")
-    set(FFTW_THREADS_LIBRARIES fftw3f_threads)
-    set(FFTW_HAS_THREADS TRUE)
-else()
-    message(STATUS "FFTW3 threads not found, using single-threaded version")
-    set(FFTW_THREADS_LIBRARIES "")
+# Platform-specific package finding
+if(WIN32)
+    # Windows with MSYS2: Use pkg-config like Unix systems
+    find_package(PkgConfig REQUIRED)
+    
+    # Set CMake policy for newer Boost versions
+    if(POLICY CMP0167)
+        cmake_policy(SET CMP0167 NEW)
+    endif()
+    
+    # Find Boost
+    find_package(Boost QUIET)
+    if(Boost_FOUND)
+        message(STATUS "Boost found: ${Boost_VERSION}")
+        set(BOOST_LIBRARIES ${Boost_LIBRARIES})
+    else()
+        message(WARNING "Boost not found via find_package, continuing...")
+        set(BOOST_LIBRARIES "")
+    endif()
+    
+    # Find FFTW3 using pkg-config
+    pkg_check_modules(FFTW3F REQUIRED fftw3f)
+    
+    # MSYS2/MinGW doesn't typically have separate threads library
     set(FFTW_HAS_THREADS FALSE)
+    set(FFTW_THREADS_LIBRARIES "")
+else()
+    # Unix (Linux/macOS): Use pkg-config
+    find_package(PkgConfig REQUIRED)
+    find_package(Boost REQUIRED)
+    set(BOOST_LIBRARIES ${Boost_LIBRARIES})
+    
+    # Find FFTW3
+    pkg_check_modules(FFTW3F REQUIRED fftw3f)
+    
+    # Check for FFTW3 threads support
+    if(UNIX AND NOT APPLE)
+        # Linux: search in standard locations
+        find_library(FFTW3F_THREADS_LIB 
+            NAMES fftw3f_threads libfftw3f_threads
+            PATHS /usr/lib /usr/local/lib /usr/lib/x86_64-linux-gnu /usr/lib/aarch64-linux-gnu
+        )
+    else()
+        # macOS: search in homebrew locations
+        find_library(FFTW3F_THREADS_LIB 
+            NAMES fftw3f_threads libfftw3f_threads
+            PATHS /opt/homebrew/lib /usr/local/lib
+            NO_DEFAULT_PATH
+        )
+    endif()
+    
+    if(FFTW3F_THREADS_LIB)
+        message(STATUS "FFTW3 with threads support found: ${FFTW3F_THREADS_LIB}")
+        set(FFTW_THREADS_LIBRARIES fftw3f_threads)
+        set(FFTW_HAS_THREADS TRUE)
+    else()
+        message(STATUS "FFTW3 threads not found, using single-threaded version")
+        set(FFTW_THREADS_LIBRARIES "")
+        set(FFTW_HAS_THREADS FALSE)
+    endif()
 endif()
 
 # Include directories
@@ -55,102 +125,192 @@ set(LIBRARIES_FROM_REFERENCES
     ${FFTW_THREADS_LIBRARIES}
 )
 
-# Find gfortran library path
-execute_process(
-    COMMAND gfortran --print-file-name=libgfortran.dylib
-    OUTPUT_VARIABLE GFORTRAN_LIB_PATH
-    OUTPUT_STRIP_TRAILING_WHITESPACE
-)
-get_filename_component(GFORTRAN_LIB_DIR ${GFORTRAN_LIB_PATH} DIRECTORY)
-
-# Platform-specific libraries for wsjtx_lib
+# Platform-specific library setup
 if(APPLE)
-    # Find libgcc_s.1 for nested function support
-    execute_process(
-        COMMAND gfortran --print-file-name=libgcc_s.1.dylib
-        OUTPUT_VARIABLE LIBGCC_S_PATH
-        OUTPUT_STRIP_TRAILING_WHITESPACE
+    # Find gfortran library path for macOS - support both Intel and ARM64
+    set(GFORTRAN_SEARCH_PATHS
+        "/opt/homebrew/bin"  # ARM64 (Apple Silicon)
+        "/usr/local/bin"     # x64 (Intel)
     )
-    get_filename_component(LIBGCC_S_DIR ${LIBGCC_S_PATH} DIRECTORY)
+    
+    # Try to find gfortran in common locations
+    find_program(GFORTRAN_EXECUTABLE 
+        NAMES gfortran gfortran-14 gfortran-13 gfortran-12 gfortran-11
+        PATHS ${GFORTRAN_SEARCH_PATHS}
+        NO_DEFAULT_PATH
+    )
+    
+    # Also try system PATH as fallback
+    if(NOT GFORTRAN_EXECUTABLE)
+        find_program(GFORTRAN_EXECUTABLE 
+            NAMES gfortran gfortran-14 gfortran-13 gfortran-12 gfortran-11
+        )
+    endif()
+    
+    if(GFORTRAN_EXECUTABLE)
+        message(STATUS "Found gfortran: ${GFORTRAN_EXECUTABLE}")
+        
+        # Set the Fortran compiler for the project
+        set(CMAKE_Fortran_COMPILER ${GFORTRAN_EXECUTABLE})
+        
+        # Get library path
+        execute_process(
+            COMMAND ${GFORTRAN_EXECUTABLE} --print-file-name=libgfortran.dylib
+            OUTPUT_VARIABLE GFORTRAN_LIB_PATH
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+            ERROR_QUIET
+        )
+        
+        if(GFORTRAN_LIB_PATH AND NOT GFORTRAN_LIB_PATH STREQUAL "libgfortran.dylib")
+            get_filename_component(GFORTRAN_LIB_DIR "${GFORTRAN_LIB_PATH}" DIRECTORY)
+            
+            # Find libgcc_s.1 for nested function support
+            execute_process(
+                COMMAND ${GFORTRAN_EXECUTABLE} --print-file-name=libgcc_s.1.dylib
+                OUTPUT_VARIABLE LIBGCC_S_PATH
+                OUTPUT_STRIP_TRAILING_WHITESPACE
+                ERROR_QUIET
+            )
+            
+            if(LIBGCC_S_PATH AND NOT LIBGCC_S_PATH STREQUAL "libgcc_s.1.dylib")
+                get_filename_component(LIBGCC_S_DIR "${LIBGCC_S_PATH}" DIRECTORY)
+                link_directories(${LIBGCC_S_DIR})
+            endif()
+            
+            link_directories(${GFORTRAN_LIB_DIR})
+        endif()
+    else()
+        message(WARNING "gfortran not found, Fortran compilation may fail")
+        message(STATUS "Searched in paths: ${GFORTRAN_SEARCH_PATHS}")
+        message(STATUS "You may need to install gfortran: brew install gcc")
+    endif()
     
     list(APPEND LIBRARIES_FROM_REFERENCES 
         "-framework Accelerate"
         gfortran 
         gcc_s.1
-        fftw3f_threads
     )
-    # Add gfortran library directory
-    link_directories(${GFORTRAN_LIB_DIR})
-    link_directories(${LIBGCC_S_DIR})
+    if(FFTW_HAS_THREADS)
+        list(APPEND LIBRARIES_FROM_REFERENCES fftw3f_threads)
+    endif()
 elseif(UNIX)
+    # Linux specific libraries
     list(APPEND LIBRARIES_FROM_REFERENCES 
         gfortran 
         gcc_s 
         pthread
-        fftw3f_threads
     )
+    if(FFTW_HAS_THREADS)
+        list(APPEND LIBRARIES_FROM_REFERENCES fftw3f_threads)
+    endif()
 elseif(WIN32)
-    list(APPEND LIBRARIES_FROM_REFERENCES gfortran)
+    # Windows specific libraries - MSYS2/MinGW environment
+    list(APPEND LIBRARIES_FROM_REFERENCES 
+        gfortran 
+        gcc_s 
+        pthread
+    )
 endif()
 
 # Add wsjtx_lib as subdirectory
 add_subdirectory(wsjtx_lib)
 
 # Link directories (must be before creating target)
-link_directories(${FFTW3F_LIBRARY_DIRS})
+if(NOT WIN32)
+    link_directories(${FFTW3F_LIBRARY_DIRS})
+endif()
 
 # Source files for the Node.js addon
 file(GLOB_RECURSE NATIVE_SOURCES "native/*.cpp" "native/*.h")
 
 # Create the Node.js addon
-add_library(${PROJECT_NAME} SHARED 
-    ${NATIVE_SOURCES}
-    ${CMAKE_JS_SRC}
-)
+if(MINGW)
+    message(STATUS "MINGW: Compiling Node.js addon without CMAKE_JS_SRC")
+    add_library(${PROJECT_NAME} SHARED 
+        ${NATIVE_SOURCES}
+        # Exclude CMAKE_JS_SRC for MinGW
+    )
+else()
+    # For other platforms (or if not MINGW, though cmake-js might handle this differently)
+    add_library(${PROJECT_NAME} SHARED 
+        ${NATIVE_SOURCES}
+        ${CMAKE_JS_SRC}
+    )
+endif()
 
 # Set properties for Node.js addon
 set_target_properties(${PROJECT_NAME} PROPERTIES 
     PREFIX "" 
     SUFFIX ".node"
     CXX_VISIBILITY_PRESET hidden
+    POSITION_INDEPENDENT_CODE ON
 )
 
 # Set Node.js addon include directories
 target_include_directories(${PROJECT_NAME} PRIVATE ${CMAKE_JS_INC})
 
-# Link libraries
-target_link_libraries(${PROJECT_NAME} 
-    ${CMAKE_JS_LIB}
-    wsjtx_lib
-    ${FFTW3F_LIBRARIES}
-    ${FFTW_THREADS_LIBRARIES}
-    ${Boost_LIBRARIES}
+# Compiler-specific options
+target_compile_definitions(${PROJECT_NAME} PRIVATE 
+    NAPI_DISABLE_CPP_EXCEPTIONS
+    BUILDING_NODE_EXTENSION
 )
 
-# Platform-specific settings
+# Add compile flags
+if(NOT WIN32)
+    target_compile_options(${PROJECT_NAME} PRIVATE ${FFTW3F_CFLAGS_OTHER})
+endif()
+
+# Link libraries
+if(MINGW)
+    message(STATUS "MINGW: Linking Node.js addon. Assuming node.exe/libnode.dll is in PATH or standard lib dirs for MinGW.")
+    target_link_libraries(${PROJECT_NAME} 
+        wsjtx_lib
+        # Potentially add -lnode or the path to libnode.dll.a if needed
+    )
+else()
+    target_link_libraries(${PROJECT_NAME} 
+        ${CMAKE_JS_LIB}
+        wsjtx_lib
+    )
+endif()
+
+# Platform-specific linking
 if(APPLE)
     target_link_libraries(${PROJECT_NAME} 
         "-framework Accelerate"
+        ${FFTW3F_LIBRARIES}
+        ${BOOST_LIBRARIES}
         gfortran 
         gcc_s.1
-        fftw3f_threads
     )
-    # Add gfortran library directory for linking
-    target_link_directories(${PROJECT_NAME} PRIVATE ${GFORTRAN_LIB_DIR})
-    target_link_directories(${PROJECT_NAME} PRIVATE ${LIBGCC_S_DIR})
+    if(FFTW_HAS_THREADS)
+        target_link_libraries(${PROJECT_NAME} fftw3f_threads)
+    endif()
 elseif(UNIX)
     target_link_libraries(${PROJECT_NAME} 
+        ${FFTW3F_LIBRARIES}
+        ${BOOST_LIBRARIES}
         gfortran 
         gcc_s 
         pthread
-        fftw3f_threads
+    )
+    if(FFTW_HAS_THREADS)
+        target_link_libraries(${PROJECT_NAME} fftw3f_threads)
+    endif()
+    
+    # Linux specific linker flags for Node.js extensions
+    # Note: We don't use --no-undefined because Node.js extensions
+    # have symbols that are resolved at runtime by the Node.js process
+    target_link_options(${PROJECT_NAME} PRIVATE 
+        -Wl,--as-needed
     )
 elseif(WIN32)
-    target_link_libraries(${PROJECT_NAME} gfortran)
+    # Windows linking - MSYS2/MinGW environment
+    target_link_libraries(${PROJECT_NAME} 
+        ${FFTW3F_LIBRARIES}
+        ${BOOST_LIBRARIES}
+        gfortran 
+        gcc_s 
+        pthread
+    )
 endif()
-
-# Compiler-specific options
-target_compile_definitions(${PROJECT_NAME} PRIVATE NAPI_DISABLE_CPP_EXCEPTIONS)
-
-# Add compile flags
-target_compile_options(${PROJECT_NAME} PRIVATE ${FFTW3F_CFLAGS_OTHER})

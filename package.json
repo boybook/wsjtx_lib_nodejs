@@ -25,10 +25,12 @@
     "build:native": "cmake-js compile",
     "build:ts": "tsc",
     "clean": "cmake-js clean && rimraf dist",
-    "test": "npm run build:ts && node --test dist/test/**/*.test.js",
-    "prepare": "npm run build",
-    "install": "cmake-js compile",
-    "prebuild": "cmake-js compile --release"
+    "test": "npm run build && node --test dist/test/wsjtx.basic.test.js",
+    "test:basic": "npm run build && node --test dist/test/wsjtx.basic.test.js",
+    "test:full": "npm run build && node --test dist/test/wsjtx.test.js",
+    "test:only": "node --test dist/test/wsjtx.test.js",
+    "prepare": "npm run build:ts",
+    "install": "prebuild-install || npm run build:native"
   },
   "keywords": [
     "wsjtx",
@@ -52,14 +54,14 @@
     "url": "git+https://github.com/boybook/wsjtx-lib-nodejs.git"
   },
   "dependencies": {
-    "node-addon-api": "^8.3.1"
+    "node-addon-api": "^8.3.1",
+    "prebuild-install": "^7.1.1"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
     "@types/wav": "^1.0.4",
     "wav": "^1.0.2",
     "cmake-js": "^7.3.0",
-    "prebuildify": "^6.0.0",
     "rimraf": "^5.0.0",
     "typescript": "^5.0.0"
   },

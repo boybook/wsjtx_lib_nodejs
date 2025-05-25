@@ -1,0 +1,326 @@
+name: Build and Package
+
+on:
+  push:
+    branches: [ main, develop ]
+    tags: [ 'v*' ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  NODE_VERSION: '18'
+
+jobs:
+  build:
+    name: Build on ${{ matrix.os }} (${{ matrix.arch }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux builds
+          - os: ubuntu-latest
+            arch: x64
+            node_arch: x64
+            cmake_arch: x86_64
+          
+          # macOS builds
+          - os: macos-latest
+            arch: arm64
+            node_arch: arm64
+            cmake_arch: arm64
+          
+          # Windows builds
+          - os: windows-latest
+            arch: x64
+            node_arch: x64
+            cmake_arch: x64
+
+    steps:
+      # 1. 检出代码
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      # 2. 设置 Node.js 环境
+      - name: Setup Node.js
+        id: setup_node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          architecture: ${{ matrix.node_arch }}
+
+      # 3. 安装系统依赖 - Linux
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            cmake \
+            build-essential \
+            gfortran \
+            libfftw3-dev \
+            libboost-all-dev \
+            pkg-config
+
+      # 3a. Linux ARM64 交叉编译设置
+      - name: Setup Linux ARM64 cross-compilation
+        if: runner.os == 'Linux' && matrix.arch == 'arm64'
+        run: |
+          sudo apt-get install -y \
+            gcc-aarch64-linux-gnu \
+            g++-aarch64-linux-gnu \
+            gfortran-aarch64-linux-gnu
+          # 添加 ARM64 架构支持
+          sudo dpkg --add-architecture arm64
+          sudo apt-get update
+          sudo apt-get install -y \
+            libfftw3-dev:arm64 \
+            libboost-all-dev:arm64
+          # 设置交叉编译环境变量
+          echo "CC=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
+          echo "CXX=aarch64-linux-gnu-g++" >> $GITHUB_ENV
+          echo "FC=aarch64-linux-gnu-gfortran" >> $GITHUB_ENV
+
+      # 3. 安装系统依赖 - macOS
+      - name: Install macOS dependencies
+        if: runner.os == 'macOS'
+        run: |
+          brew install cmake fftw boost gcc pkg-config
+          
+          # 根据架构设置不同的路径
+          if [ "${{ matrix.arch }}" = "arm64" ]; then
+            # Apple Silicon (ARM64)
+            BREW_PREFIX="/opt/homebrew"
+          else
+            # Intel (x64)
+            BREW_PREFIX="/usr/local"
+          fi
+          
+          # 确保brew路径在PATH中
+          echo "${BREW_PREFIX}/bin" >> $GITHUB_PATH
+          
+          # 验证gfortran安装并设置环境变量
+          echo "Checking gfortran installation..."
+          ls -la ${BREW_PREFIX}/bin/gfortran* || echo "gfortran not found"
+          
+          # 找到正确的gfortran路径
+          GFORTRAN_PATH=$(find ${BREW_PREFIX}/bin -name "gfortran*" | head -1)
+          if [ -n "$GFORTRAN_PATH" ] && [ -x "$GFORTRAN_PATH" ]; then
+            echo "Found gfortran at: $GFORTRAN_PATH"
+            echo "FC=$GFORTRAN_PATH" >> $GITHUB_ENV
+            echo "CMAKE_Fortran_COMPILER=$GFORTRAN_PATH" >> $GITHUB_ENV
+            
+            # 测试gfortran
+            $GFORTRAN_PATH --version || echo "gfortran test failed"
+          else
+            echo "ERROR: gfortran not found or not executable"
+            exit 1
+          fi
+          
+          # 设置库路径
+          echo "LIBRARY_PATH=${BREW_PREFIX}/lib:$LIBRARY_PATH" >> $GITHUB_ENV
+          echo "LD_LIBRARY_PATH=${BREW_PREFIX}/lib:$LD_LIBRARY_PATH" >> $GITHUB_ENV
+
+      # 3. 安装系统依赖 - Windows
+      - name: Setup MSYS2 for Windows build
+        if: runner.os == 'Windows'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          path-type: inherit
+          install: >-
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-gcc-fortran
+            mingw-w64-x86_64-cmake
+            mingw-w64-x86_64-ninja
+            mingw-w64-x86_64-pkg-config
+            mingw-w64-x86_64-fftw
+            mingw-w64-x86_64-boost
+
+      - name: Setup Windows environment
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: |
+          echo "/c/msys64/mingw64/bin" >> $GITHUB_PATH
+          echo "Verifying pkg-config installation..."
+          which pkg-config || (echo "pkg-config not found, reinstalling..." && pacman -S --noconfirm mingw-w64-x86_64-pkg-config)
+          pkg-config --version || (echo "Unable to run pkg-config, reinstalling..." && pacman -S --noconfirm mingw-w64-x86_64-pkg-config)
+          
+          echo "CC=gcc" >> $GITHUB_ENV
+          echo "CXX=g++" >> $GITHUB_ENV
+          echo "FC=gfortran" >> $GITHUB_ENV
+          echo "CMAKE_Fortran_COMPILER=gfortran" >> $GITHUB_ENV
+          echo "CMAKE_GENERATOR=MinGW Makefiles" >> $GITHUB_ENV
+      
+          gcc --version
+          g++ --version
+          gfortran --version
+          cmake --version
+
+      # 4. 安装 npm 依赖
+      - name: Install npm dependencies
+        run: npm ci --ignore-scripts
+
+      # 5. 构建 TypeScript
+      - name: Build TypeScript
+        run: npm run build:ts
+
+      # 6. 构建原生模块 - Linux/macOS
+      - name: Build native module (Linux/macOS)
+        if: runner.os != 'Windows'
+        run: |
+          if [ "${{ matrix.arch }}" = "arm64" ] && [ "${{ runner.os }}" = "Linux" ]; then
+            # Linux ARM64 交叉编译
+            npx cmake-js compile --arch=${{ matrix.cmake_arch }} \
+              --CDCMAKE_SYSTEM_NAME=Linux \
+              --CDCMAKE_SYSTEM_PROCESSOR=aarch64 \
+              --CDCMAKE_C_COMPILER=aarch64-linux-gnu-gcc \
+              --CDCMAKE_CXX_COMPILER=aarch64-linux-gnu-g++ \
+              --CDCMAKE_Fortran_COMPILER=aarch64-linux-gnu-gfortran
+          else
+            # 本地编译
+            npx cmake-js compile --arch=${{ matrix.cmake_arch }}
+          fi
+
+      # 6. 构建原生模块 - Windows
+      - name: Build native module (Windows)
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: |
+          echo "--- Checking Node.js and npx in MSYS2 (with path-type: inherit) ---"
+          echo "PATH: $PATH"
+          
+          echo "which node:"
+          which node || echo "node not found"
+          echo "node --version:"
+          node --version || echo "node not runnable"
+          
+          echo "which npx:"
+          which npx || echo "npx not found"
+          echo "npx --version:"
+          npx --version || echo "npx not runnable"
+          
+          echo "Attempting to run npx cmake-js compile..."
+          npx cmake-js compile --arch=${{ matrix.cmake_arch }} \
+            -G "MinGW Makefiles" \
+            --CDCMAKE_C_COMPILER=gcc \
+            --CDCMAKE_CXX_COMPILER=g++ \
+            --CDCMAKE_Fortran_COMPILER=gfortran \
+            --CDCMAKE_SHARED_LINKER_FLAGS='' \
+            --CDCMAKE_MODULE_LINKER_FLAGS='' \
+            --CDCMAKE_EXE_LINKER_FLAGS='' \
+            --CDCMAKE_JS_SRC='' \
+            --verbose
+
+      # 7. 运行测试
+      - name: Run tests
+        run: |
+          # 显示编译后的文件结构
+          echo "📁 Checking compiled files structure:"
+          ls -la dist/ || echo "dist directory not found"
+          find dist -name "*.js" -type f || echo "No JS files found in dist"
+          
+          # 检查测试文件是否存在
+          if [ -f "dist/test/wsjtx.basic.test.js" ]; then
+            echo "✅ Basic test file found: dist/test/wsjtx.basic.test.js"
+            
+            # 检查原生模块是否存在
+            if [ -f "build/Release/wsjtx_lib_nodejs.node" ]; then
+              echo "✅ Native module found: build/Release/wsjtx_lib_nodejs.node"
+              # 运行基础测试
+              npm test
+            else
+              echo "❌ Native module not found! Cannot run tests."
+              exit 1
+            fi
+          else
+            echo "❌ Basic test file not found!"
+            exit 1
+          fi
+
+      # 8. 创建预构建二进制文件
+      - name: Create prebuilt binaries
+        run: |
+          # 创建目标目录
+          mkdir -p prebuilds/${{ matrix.os }}-${{ matrix.arch }}
+          
+          # 复制构建的 .node 文件
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            cp build/Release/*.node prebuilds/${{ matrix.os }}-${{ matrix.arch }}/
+          else
+            cp build/Release/*.node prebuilds/${{ matrix.os }}-${{ matrix.arch }}/
+          fi
+          
+          # 显示构建结果
+          echo "构建完成的文件:"
+          ls -la prebuilds/${{ matrix.os }}-${{ matrix.arch }}/
+        shell: bash
+
+      # 9. 上传构建产物到 artifacts
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: prebuilt-${{ matrix.os }}-${{ matrix.arch }}
+          path: prebuilds/
+          retention-days: 30
+          if-no-files-found: error
+
+      # 10. 上传完整构建目录（用于调试）
+      - name: Upload build directory for debugging
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-debug-${{ matrix.os }}-${{ matrix.arch }}
+          path: build/
+          retention-days: 7
+
+  # 汇总所有构建产物
+  collect-artifacts:
+    name: Collect All Artifacts
+    needs: build
+    runs-on: ubuntu-latest
+    if: always() && needs.build.result == 'success'
+    
+    steps:
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: all-artifacts
+
+      - name: Organize artifacts
+        run: |
+          mkdir -p final-prebuilds
+          
+          # 合并所有预构建文件
+          for artifact_dir in all-artifacts/prebuilt-*; do
+            if [ -d "$artifact_dir" ]; then
+              echo "处理 $artifact_dir"
+              cp -r "$artifact_dir"/* final-prebuilds/
+            fi
+          done
+          
+          # 显示最终结果
+          echo "所有平台的构建产物:"
+          find final-prebuilds -name "*.node" -exec ls -la {} \;
+          
+          # 创建构建摘要
+          echo "# 构建摘要" > build-summary.md
+          echo "构建时间: $(date)" >> build-summary.md
+          echo "## 支持的平台:" >> build-summary.md
+          find final-prebuilds -name "*.node" | while read file; do
+            platform=$(echo "$file" | cut -d'/' -f2)
+            echo "- $platform" >> build-summary.md
+          done
+
+      - name: Upload combined artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: all-prebuilds
+          path: |
+            final-prebuilds/
+            build-summary.md
+          retention-days: 90 
