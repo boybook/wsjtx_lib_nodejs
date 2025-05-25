@@ -1,0 +1,78 @@
+{
+  "name": "wsjtx-lib",
+  "version": "1.0.0",
+  "description": "Node.js C++ extension for WSJTX digital radio protocol library",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "build/Release/*.node",
+    "prebuilds",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "npm run build:native && npm run build:ts",
+    "build:native": "cmake-js compile",
+    "build:ts": "tsc",
+    "clean": "cmake-js clean && rimraf dist",
+    "test": "npm run build:ts && node --test dist/test/**/*.test.js",
+    "prepare": "npm run build",
+    "install": "cmake-js compile",
+    "prebuild": "cmake-js compile --release"
+  },
+  "keywords": [
+    "wsjtx",
+    "ft8",
+    "ft4",
+    "wspr",
+    "ham",
+    "radio",
+    "digital",
+    "protocol",
+    "decoder",
+    "encoder",
+    "native",
+    "addon",
+    "typescript"
+  ],
+  "author": "boybook",
+  "license": "GPL-3.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/boybook/wsjtx-lib-nodejs.git"
+  },
+  "dependencies": {
+    "node-addon-api": "^8.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/wav": "^1.0.4",
+    "wav": "^1.0.2",
+    "cmake-js": "^7.3.0",
+    "prebuildify": "^6.0.0",
+    "rimraf": "^5.0.0",
+    "typescript": "^5.0.0"
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  },
+  "os": [
+    "darwin",
+    "linux",
+    "win32"
+  ],
+  "cpu": [
+    "x64",
+    "arm64"
+  ]
+}
