@@ -87,7 +87,7 @@ async function example() {
     const encodeResult = await lib.encode(
         WSJTXMode.FT8,
         'CQ TEST K1ABC FN20',
-        14074000  // 20m FT8 frequency
+        1000  // Audio base frequency in Hz (typically 500-3000 Hz)
     );
     
     console.log(`Generated ${encodeResult.audioData.length} audio samples`);
@@ -100,7 +100,7 @@ async function example() {
     const decodeResult = await lib.decode(
         WSJTXMode.FT8,
         audioData,
-        14074000
+        1000  // Same audio base frequency used for encoding
     );
     
     // Get decoded messages
@@ -137,7 +137,7 @@ Decode digital radio signals from audio data.
 **Parameters:**
 - `mode`: WSJTXMode enum value
 - `audioData`: Float32Array or Int16Array of audio samples
-- `frequency`: Center frequency in Hz
+- `frequency`: Audio base frequency in Hz (typically 500-3000 Hz for FT8)
 - `threads`: Number of threads to use (optional, default: 4)
 
 **Returns:** Promise resolving to DecodeResult with success status
@@ -149,7 +149,7 @@ Encode a message into audio waveform for transmission.
 **Parameters:**
 - `mode`: WSJTXMode enum value
 - `message`: Message text to encode (1-22 characters)
-- `frequency`: Center frequency in Hz
+- `frequency`: Audio base frequency in Hz (typically 500-3000 Hz for FT8)
 - `threads`: Number of threads to use (optional, default: 4)
 
 **Returns:** Promise resolving to EncodeResult with audio data and actual message sent
@@ -250,17 +250,19 @@ import { WSJTXLib, WSJTXMode } from 'wsjtx-lib';
 const lib = new WSJTXLib();
 
 // Encode a message
-const result = await lib.encode(WSJTXMode.FT8, 'CQ DX K1ABC FN20', 14074000);
+const result = await lib.encode(WSJTXMode.FT8, 'CQ DX K1ABC FN20', 1500);
 console.log(`Audio samples: ${result.audioData.length}`);
 
 // Decode audio (replace with actual audio data)
 const audioData = new Float32Array(48000 * 13);
-const decodeResult = await lib.decode(WSJTXMode.FT8, audioData, 14074000);
+const decodeResult = await lib.decode(WSJTXMode.FT8, audioData, 1500);
 
 // Get messages
 const messages = lib.pullMessages();
 console.log(`Found ${messages.length} messages`);
 ```
+
+> **Important Note**: The `frequency` parameter is the **audio base frequency** (typically 500-3000 Hz), not the RF frequency. For example, if you're operating on 20m FT8 (14.074 MHz RF), you might use 1500 Hz as the audio frequency within your transceiver's passband.
 
 ### WSPR Decoding
 
@@ -274,7 +276,7 @@ const iqData = new Float32Array(2 * 12000 * 120); // 2 minutes
 // ... fill with actual IQ data ...
 
 const options = {
-    dialFrequency: 14095600,  // 20m WSPR frequency
+    dialFrequency: 14095600,  // RF dial frequency for WSPR (this is different from audio frequency)
     callsign: 'K1ABC',
     locator: 'FN20',
     quickMode: false,
@@ -308,7 +310,7 @@ The library throws `WSJTXError` for all operation failures:
 import { WSJTXError } from 'wsjtx-lib';
 
 try {
-    await lib.decode(WSJTXMode.FT8, audioData, 14074000);
+    await lib.decode(WSJTXMode.FT8, audioData, 1500);
 } catch (error) {
     if (error instanceof WSJTXError) {
         console.error(`WSJTX Error [${error.code}]: ${error.message}`);

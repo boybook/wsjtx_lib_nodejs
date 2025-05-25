@@ -13,7 +13,7 @@
  * 
  * // Decode FT8 audio data
  * const audioData = new Float32Array(48000 * 13); // 13 seconds at 48kHz
- * const result = await lib.decode(WSJTXMode.FT8, audioData, 14074000);
+ * const result = await lib.decode(WSJTXMode.FT8, audioData, 1500);
  * 
  * // Get decoded messages
  * const messages = lib.pullMessages();
@@ -111,7 +111,7 @@ export class WSJTXLib {
    * @example
    * ```typescript
    * const audioData = new Float32Array(48000 * 13); // 13 seconds
-   * await lib.decode(WSJTXMode.FT8, audioData, 14074000);
+   * await lib.decode(WSJTXMode.FT8, audioData, 1500);
    * const messages = lib.pullMessages();
    * ```
    */
@@ -168,7 +168,7 @@ export class WSJTXLib {
    * 
    * @example
    * ```typescript
-   * const result = await lib.encode(WSJTXMode.FT8, 'CQ DX K1ABC FN20', 14074000);
+   * const result = await lib.encode(WSJTXMode.FT8, 'CQ DX K1ABC FN20', 1500);
    * console.log('Generated audio samples:', result.audioData.length);
    * console.log('Actual message sent:', result.messageSent);
    * ```
