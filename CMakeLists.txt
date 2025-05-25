@@ -14,6 +14,31 @@ if(MSVC)
     message(STATUS "Using MSVC toolchain on Windows")
     # Enable Fortran support via Intel oneAPI if available
     # vcpkg toolchain file should be passed to CMake invocation
+    
+    # Try to find Intel Fortran compiler
+    if(NOT CMAKE_Fortran_COMPILER)
+        find_program(IFORT_EXECUTABLE 
+            NAMES ifort.exe ifx.exe ifort ifx
+            PATHS 
+                "C:/Program Files (x86)/Intel/oneAPI/compiler/latest/windows/bin/intel64"
+                "C:/Program Files (x86)/Intel/oneAPI/compiler/latest/windows/bin"
+                "C:/Program Files/Intel/oneAPI/compiler/latest/windows/bin/intel64"
+                "C:/Program Files/Intel/oneAPI/compiler/latest/windows/bin"
+                "C:/Program Files (x86)/Intel/oneAPI/compiler/2023.2.0/windows/bin/intel64"
+                "C:/Program Files (x86)/Intel/oneAPI/compiler/2023.2.0/windows/bin"
+                "C:/Program Files (x86)/Intel/oneAPI/compiler/2021.10.0/windows/bin/intel64"
+                "C:/Program Files (x86)/Intel/oneAPI/compiler/2021.10.0/windows/bin"
+            DOC "Intel Fortran Compiler"
+        )
+        
+        if(IFORT_EXECUTABLE)
+            message(STATUS "Found Intel Fortran compiler: ${IFORT_EXECUTABLE}")
+            set(CMAKE_Fortran_COMPILER ${IFORT_EXECUTABLE} CACHE FILEPATH "Fortran compiler" FORCE)
+        else()
+            message(WARNING "Intel Fortran compiler not found. Fortran compilation may fail.")
+            message(STATUS "Please ensure Intel oneAPI HPC Toolkit is installed and setvars.bat has been called.")
+        endif()
+    endif()
 endif()
 
 # Set C++ standard

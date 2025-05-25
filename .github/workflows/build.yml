@@ -134,14 +134,8 @@ jobs:
         run: |
           git clone https://github.com/Microsoft/vcpkg.git
           .\vcpkg\bootstrap-vcpkg.bat
-          
-          # 使用经典模式安装依赖包 (fftw3包含所有精度版本)
           .\vcpkg\vcpkg install fftw3:x64-windows boost:x64-windows
-          
-          # 设置vcpkg环境变量
-          echo "VCPKG_ROOT=${{ github.workspace }}\vcpkg" >> $env:GITHUB_ENV
-          echo "CMAKE_TOOLCHAIN_FILE=${{ github.workspace }}\vcpkg\scripts\buildsystems\vcpkg.cmake" >> $env:GITHUB_ENV
-        shell: powershell
+        shell: cmd
 
       - name: Setup Intel Fortran
         if: runner.os == 'Windows'
@@ -149,6 +143,34 @@ jobs:
         with:
           compiler: intel-classic
           version: '2021.10'
+
+      - name: Verify Intel Fortran installation
+        if: runner.os == 'Windows'
+        run: |
+          echo "=== Verifying Intel Fortran installation ==="
+          echo "PATH: %PATH%"
+          echo "Checking for ifort..."
+          where ifort || echo "ifort not found in PATH"
+          echo "Checking for ifx..."
+          where ifx || echo "ifx not found in PATH"
+          
+          echo "Trying to run ifort (Windows style)..."
+          ifort /help | findstr "Intel" || echo "ifort help failed"
+          echo "Trying to run ifx (Windows style)..."
+          ifx /help | findstr "Intel" || echo "ifx help failed"
+          
+          echo "Setting environment variables..."
+          if exist "C:\Program Files (x86)\Intel\oneAPI\setvars.bat" (
+            echo "Found Intel oneAPI setvars.bat"
+            call "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
+          ) else (
+            echo "Intel oneAPI setvars.bat not found"
+          )
+          
+          echo "Re-checking after setvars..."
+          where ifort && echo "ifort found" || echo "ifort still not found"
+          where ifx && echo "ifx found" || echo "ifx still not found"
+        shell: cmd
 
       # 4. 安装 npm 依赖
       - name: Install npm dependencies
@@ -183,15 +205,28 @@ jobs:
         if: runner.os == 'Windows'
         run: |
           echo "--- Building with MSVC toolchain ---"
-          if (Test-Path "build") { Remove-Item -Recurse -Force "build" }
           
-          npx cmake-js compile --arch=${{ matrix.cmake_arch }} `
-            -G "Visual Studio 17 2022" -A x64 `
-            --CDCMAKE_TOOLCHAIN_FILE="$env:CMAKE_TOOLCHAIN_FILE" `
-            --CDVCPKG_MANIFEST_MODE=OFF `
-            --CDVCPKG_MANIFEST_INSTALL=OFF `
+          echo "Setting up Intel Fortran environment..."
+          if exist "C:\Program Files (x86)\Intel\oneAPI\setvars.bat" (
+            echo "Calling Intel oneAPI setvars.bat..."
+            call "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
+          )
+          
+          echo "Verifying Fortran compiler after environment setup..."
+          where ifort && echo "ifort available" || echo "ifort not available"
+          where ifx && echo "ifx available" || echo "ifx not available"
+          
+          echo "Cleaning build directory..."
+          rmdir /s /q build 2>nul || echo "No build directory to clean"
+          
+          echo "Starting cmake-js compilation..."
+          set IFORT_PATH=C:\Program Files (x86)\Intel\oneAPI\compiler\latest\windows\bin\intel64\ifort.exe
+          npx cmake-js compile --arch=${{ matrix.cmake_arch }} ^
+            -G "Visual Studio 17 2022" -A x64 ^
+            --CDCMAKE_TOOLCHAIN_FILE=vcpkg\scripts\buildsystems\vcpkg.cmake ^
+            --CDCMAKE_Fortran_COMPILER="%IFORT_PATH%" ^
             --verbose
-        shell: powershell
+        shell: cmd
 
       # 7. 运行测试
       - name: Run tests
