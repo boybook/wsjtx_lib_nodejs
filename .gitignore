@@ -1,0 +1,9 @@
+node_modules/
+build/
+prebuilds/
+dist/
+
+# FFTW wisdom files (machine-specific optimization cache)
+fftw_wisdom.dat
+*.wisdom
+hashtable.txt
