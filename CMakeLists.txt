@@ -7,37 +7,76 @@ if(DEFINED CMAKE_TOOLCHAIN_FILE AND CMAKE_TOOLCHAIN_FILE MATCHES "vcpkg")
     message(STATUS "Detected vcpkg toolchain, disabling manifest mode")
 endif()
 
+
 project(wsjtx_lib_nodejs LANGUAGES C CXX Fortran)
 
+# Honour RC compiler path injected from CI to avoid node‑rc conflicts
+if(DEFINED ENV{CMAKE_RC_COMPILER})
+    set(CMAKE_RC_COMPILER "$ENV{CMAKE_RC_COMPILER}" CACHE FILEPATH "RC compiler" FORCE)
+endif()
+
 # Use MSVC on Windows by default, else keep existing
-if(MSVC)
-    message(STATUS "Using MSVC toolchain on Windows")
-    # Enable Fortran support via Intel oneAPI if available
-    # vcpkg toolchain file should be passed to CMake invocation
+if(WIN32)
+    message(STATUS "Windows platform detected")
     
-    # Try to find Intel Fortran compiler
+    # Force use of MSVC compilers for C/C++, Intel for Fortran only
+    if(NOT CMAKE_C_COMPILER)
+        find_program(MSVC_C_COMPILER
+            NAMES cl.exe
+            PATHS
+                "C:/Program Files/Microsoft Visual Studio/2022/Enterprise/VC/Tools/MSVC/*/bin/Hostx64/x64"
+                "C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/MSVC/*/bin/Hostx64/x64"
+                "C:/Program Files/Microsoft Visual Studio/2022/Professional/VC/Tools/MSVC/*/bin/Hostx64/x64"
+                "C:/Program Files (x86)/Microsoft Visual Studio/*/VC/Tools/MSVC/*/bin/Hostx64/x64"
+            DOC "MSVC C Compiler"
+        )
+        if(MSVC_C_COMPILER)
+            set(CMAKE_C_COMPILER ${MSVC_C_COMPILER} CACHE FILEPATH "C compiler" FORCE)
+            message(STATUS "Found MSVC C compiler: ${MSVC_C_COMPILER}")
+        endif()
+    endif()
+    
+    if(NOT CMAKE_CXX_COMPILER)
+        find_program(MSVC_CXX_COMPILER
+            NAMES cl.exe
+            PATHS
+                "C:/Program Files/Microsoft Visual Studio/2022/Enterprise/VC/Tools/MSVC/*/bin/Hostx64/x64"
+                "C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/MSVC/*/bin/Hostx64/x64"
+                "C:/Program Files/Microsoft Visual Studio/2022/Professional/VC/Tools/MSVC/*/bin/Hostx64/x64"
+                "C:/Program Files (x86)/Microsoft Visual Studio/*/VC/Tools/MSVC/*/bin/Hostx64/x64"
+            DOC "MSVC CXX Compiler"
+        )
+        if(MSVC_CXX_COMPILER)
+            set(CMAKE_CXX_COMPILER ${MSVC_CXX_COMPILER} CACHE FILEPATH "CXX compiler" FORCE)
+            message(STATUS "Found MSVC C++ compiler: ${MSVC_CXX_COMPILER}")
+        endif()
+    endif()
+    
+    # Intel Fortran compiler should be available in PATH after setvars.bat
+    # Let CMake find it automatically if not explicitly set
     if(NOT CMAKE_Fortran_COMPILER)
-        find_program(IFORT_EXECUTABLE 
-            NAMES ifort.exe ifx.exe ifort ifx
-            PATHS 
+        message(STATUS "CMAKE_Fortran_COMPILER not set, trying to find Intel Fortran compiler")
+        
+        # Try to find Intel Fortran compiler in common locations
+        find_program(INTEL_FORTRAN_COMPILER
+            NAMES ifort.exe ifort ifx.exe ifx
+            PATHS
                 "C:/Program Files (x86)/Intel/oneAPI/compiler/latest/windows/bin/intel64"
                 "C:/Program Files (x86)/Intel/oneAPI/compiler/latest/windows/bin"
                 "C:/Program Files/Intel/oneAPI/compiler/latest/windows/bin/intel64"
                 "C:/Program Files/Intel/oneAPI/compiler/latest/windows/bin"
-                "C:/Program Files (x86)/Intel/oneAPI/compiler/2023.2.0/windows/bin/intel64"
-                "C:/Program Files (x86)/Intel/oneAPI/compiler/2023.2.0/windows/bin"
-                "C:/Program Files (x86)/Intel/oneAPI/compiler/2021.10.0/windows/bin/intel64"
-                "C:/Program Files (x86)/Intel/oneAPI/compiler/2021.10.0/windows/bin"
             DOC "Intel Fortran Compiler"
         )
         
-        if(IFORT_EXECUTABLE)
-            message(STATUS "Found Intel Fortran compiler: ${IFORT_EXECUTABLE}")
-            set(CMAKE_Fortran_COMPILER ${IFORT_EXECUTABLE} CACHE FILEPATH "Fortran compiler" FORCE)
+        if(INTEL_FORTRAN_COMPILER)
+            message(STATUS "Found Intel Fortran compiler: ${INTEL_FORTRAN_COMPILER}")
+            set(CMAKE_Fortran_COMPILER ${INTEL_FORTRAN_COMPILER} CACHE FILEPATH "Fortran compiler" FORCE)
         else()
-            message(WARNING "Intel Fortran compiler not found. Fortran compilation may fail.")
-            message(STATUS "Please ensure Intel oneAPI HPC Toolkit is installed and setvars.bat has been called.")
+            message(WARNING "Intel Fortran compiler not found automatically")
+            message(STATUS "Please ensure Intel oneAPI HPC Toolkit is installed and CMAKE_Fortran_COMPILER is set")
         endif()
+    else()
+        message(STATUS "Using specified Fortran compiler: ${CMAKE_Fortran_COMPILER}")
     endif()
 endif()
 
@@ -79,7 +118,7 @@ endif()
 
 # Include cmake-js
 if(CMAKE_JS_INC)
-    include_directories(${CMAKE_JS_INC})
+include_directories(${CMAKE_JS_INC})
 endif()
 
 # Add Node.js include path for node_api.h
@@ -93,13 +132,21 @@ include_directories(${NODE_INCLUDE_DIR})
 # Platform-specific package finding
 if(WIN32 AND MSVC)
     # Windows with MSVC: Use vcpkg for FFTW3
-    find_package(FFTW3 CONFIG REQUIRED)
-    
+    find_package(FFTW3 CONFIG REQUIRED)            # vcpkg provides FFTW3Config.cmake
+    # Prefer the single‑precision (float) library that matches wsjtx requirements.
+    if(TARGET FFTW3::fftw3f)
+        set(FFTW3_LIB_TARGET FFTW3::fftw3f)
+    elseif(TARGET FFTW3::fftw3)
+        set(FFTW3_LIB_TARGET FFTW3::fftw3)
+    else()
+        message(FATAL_ERROR "FFTW3 import targets not found – ensure vcpkg installed fftw3[float,threads]:x64-windows")
+    endif()
+
     # Set CMake policy for newer Boost versions
     if(POLICY CMP0167)
         cmake_policy(SET CMP0167 NEW)
     endif()
-    
+
     # Find Boost
     find_package(Boost QUIET)
     if(Boost_FOUND)
@@ -109,7 +156,7 @@ if(WIN32 AND MSVC)
         message(WARNING "Boost not found via find_package, continuing...")
         set(BOOST_LIBRARIES "")
     endif()
-    
+
     # MSVC doesn't need separate threads library for FFTW
     set(FFTW_HAS_THREADS FALSE)
     set(FFTW_THREADS_LIBRARIES "")
@@ -182,25 +229,36 @@ if(WIN32 AND MSVC)
         ${CMAKE_SOURCE_DIR}/node_modules/node-addon-api
     )
 else()
-    include_directories(
-        ${CMAKE_SOURCE_DIR}/wsjtx_lib
-        ${CMAKE_SOURCE_DIR}/native
-        ${CMAKE_SOURCE_DIR}/node_modules/node-addon-api
-        ${FFTW3F_INCLUDE_DIRS}
-        ${Boost_INCLUDE_DIRS}
-    )
+include_directories(
+    ${CMAKE_SOURCE_DIR}/wsjtx_lib
+    ${CMAKE_SOURCE_DIR}/native
+    ${CMAKE_SOURCE_DIR}/node_modules/node-addon-api
+    ${FFTW3F_INCLUDE_DIRS}
+    ${Boost_INCLUDE_DIRS}
+)
 endif()
 
 # Define LIBRARIES_FROM_REFERENCES for wsjtx_lib submodule
 if(WIN32 AND MSVC)
+    # Determine the correct FFTW3 target name for wsjtx_lib
+    if(NOT TARGET FFTW3_LIB_TARGET)
+        if(TARGET FFTW3::fftw3f)
+            set(FFTW3_LIB_TARGET FFTW3::fftw3f)
+        elseif(TARGET FFTW3::fftw3)
+            set(FFTW3_LIB_TARGET FFTW3::fftw3)
+        else()
+            message(FATAL_ERROR "No valid FFTW3 target found during link step")
+        endif()
+    endif()
+
     set(LIBRARIES_FROM_REFERENCES 
-        FFTW3::fftw3
+        ${FFTW3_LIB_TARGET}
     )
 else()
-    set(LIBRARIES_FROM_REFERENCES 
-        ${FFTW3F_LIBRARIES}
-        ${FFTW_THREADS_LIBRARIES}
-    )
+set(LIBRARIES_FROM_REFERENCES 
+    ${FFTW3F_LIBRARIES}
+    ${FFTW_THREADS_LIBRARIES}
+)
 endif()
 
 # Platform-specific library setup
@@ -292,8 +350,8 @@ add_subdirectory(wsjtx_lib)
 
 # Link directories (must be before creating target)
 if(NOT WIN32 OR NOT MSVC)
-    if(NOT WIN32)
-        link_directories(${FFTW3F_LIBRARY_DIRS})
+if(NOT WIN32)
+    link_directories(${FFTW3F_LIBRARY_DIRS})
     endif()
 endif()
 
@@ -325,7 +383,7 @@ set_target_properties(${PROJECT_NAME} PROPERTIES
 
 # Set Node.js addon include directories
 if(CMAKE_JS_INC)
-    target_include_directories(${PROJECT_NAME} PRIVATE ${CMAKE_JS_INC})
+target_include_directories(${PROJECT_NAME} PRIVATE ${CMAKE_JS_INC})
 endif()
 
 # Compiler-specific options
@@ -336,8 +394,8 @@ target_compile_definitions(${PROJECT_NAME} PRIVATE
 
 # Add compile flags
 if(NOT WIN32 OR NOT MSVC)
-    if(NOT WIN32)
-        target_compile_options(${PROJECT_NAME} PRIVATE ${FFTW3F_CFLAGS_OTHER})
+if(NOT WIN32)
+    target_compile_options(${PROJECT_NAME} PRIVATE ${FFTW3F_CFLAGS_OTHER})
     endif()
 endif()
 
@@ -353,9 +411,21 @@ elseif(WIN32 AND MSVC)
     if(CMAKE_JS_LIB)
         target_link_libraries(${PROJECT_NAME} PRIVATE ${CMAKE_JS_LIB})
     endif()
+
+    # Determine the correct FFTW3 target name
+    if(NOT TARGET FFTW3_LIB_TARGET)
+        if(TARGET FFTW3::fftw3f)
+            set(FFTW3_LIB_TARGET FFTW3::fftw3f)
+        elseif(TARGET FFTW3::fftw3)
+            set(FFTW3_LIB_TARGET FFTW3::fftw3)
+        else()
+            message(FATAL_ERROR "No valid FFTW3 target found during link step")
+        endif()
+    endif()
+
     target_link_libraries(${PROJECT_NAME} PRIVATE
         wsjtx_lib
-        FFTW3::fftw3
+        ${FFTW3_LIB_TARGET}
         ${BOOST_LIBRARIES}
     )
 else()

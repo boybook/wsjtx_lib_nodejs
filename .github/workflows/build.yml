@@ -129,12 +129,29 @@ jobs:
         if: runner.os == 'Windows'
         uses: microsoft/setup-msbuild@v1
 
-      - name: Setup vcpkg & install FFTW3
+      - name: Setup vcpkg & deps (Windows)
         if: runner.os == 'Windows'
         run: |
-          git clone https://github.com/Microsoft/vcpkg.git
-          .\vcpkg\bootstrap-vcpkg.bat
-          .\vcpkg\vcpkg install fftw3:x64-windows boost:x64-windows
+          set VCPKG_ROOT=%CD%\vcpkg
+          git clone https://github.com/Microsoft/vcpkg.git %VCPKG_ROOT%
+          %VCPKG_ROOT%\bootstrap-vcpkg.bat
+          rem install float + threads variant so we get fftwf + multithread support
+          %VCPKG_ROOT%\vcpkg install fftw3[float,threads]:x64-windows boost:x64-windows
+          rem expose vcpkg-installed prefix to later cmake invocations
+          echo VCPKG_ROOT=%VCPKG_ROOT%>>%GITHUB_ENV%
+          echo CMAKE_PREFIX_PATH=%VCPKG_ROOT%\installed\x64-windows>>%GITHUB_ENV%
+        shell: cmd
+
+      - name: Strip node rc from PATH (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          rem Delete Node‑wrapped rc scripts that mask the real RC compiler
+          if exist "node_modules\.bin\rc" del /q node_modules\.bin\rc
+          if exist "node_modules\.bin\rc.cmd" del /q node_modules\.bin\rc.cmd
+          if exist "node_modules\.bin\rc.ps1" del /q node_modules\.bin\rc.ps1
+          rem Cache the genuine Windows SDK rc.exe path for CMake
+          for /f "delims=" %%v in ('dir "%ProgramFiles(x86)%\Windows Kits\10\bin" /b /ad ^| sort /r') do if not defined SDKVER set "SDKVER=%%v"
+          echo CMAKE_RC_COMPILER=%ProgramFiles(x86)%\Windows Kits\10\bin\%SDKVER%\x64\rc.exe>>%GITHUB_ENV%
         shell: cmd
 
       - name: Setup Intel Fortran
@@ -148,28 +165,22 @@ jobs:
         if: runner.os == 'Windows'
         run: |
           echo "=== Verifying Intel Fortran installation ==="
-          echo "PATH: %PATH%"
           echo "Checking for ifort..."
           where ifort || echo "ifort not found in PATH"
           echo "Checking for ifx..."
           where ifx || echo "ifx not found in PATH"
           
-          echo "Trying to run ifort (Windows style)..."
-          ifort /help | findstr "Intel" || echo "ifort help failed"
-          echo "Trying to run ifx (Windows style)..."
-          ifx /help | findstr "Intel" || echo "ifx help failed"
-          
-          echo "Setting environment variables..."
+          echo "Setting up Intel oneAPI environment..."
           if exist "C:\Program Files (x86)\Intel\oneAPI\setvars.bat" (
-            echo "Found Intel oneAPI setvars.bat"
+            echo "Calling Intel oneAPI setvars.bat..."
             call "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
           ) else (
             echo "Intel oneAPI setvars.bat not found"
           )
           
-          echo "Re-checking after setvars..."
-          where ifort && echo "ifort found" || echo "ifort still not found"
-          where ifx && echo "ifx found" || echo "ifx still not found"
+          echo "Final check - Fortran compilers available:"
+          where ifort && echo "✅ ifort ready" || echo "❌ ifort not available"
+          where ifx && echo "✅ ifx ready" || echo "❌ ifx not available"
         shell: cmd
 
       # 4. 安装 npm 依赖
@@ -212,20 +223,67 @@ jobs:
             call "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
           )
           
-          echo "Verifying Fortran compiler after environment setup..."
+          echo "Setting up MSVC environment..."
+          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
+          
+          echo "Verifying compilers after environment setup..."
+          where cl && echo "MSVC cl available" || echo "MSVC cl not available"
           where ifort && echo "ifort available" || echo "ifort not available"
           where ifx && echo "ifx available" || echo "ifx not available"
           
           echo "Cleaning build directory..."
           rmdir /s /q build 2>nul || echo "No build directory to clean"
           
-          echo "Starting cmake-js compilation..."
-          set IFORT_PATH=C:\Program Files (x86)\Intel\oneAPI\compiler\latest\windows\bin\intel64\ifort.exe
+          echo "Starting cmake-js compilation with NMake..."
+          set "IFORT_PATH=C:/Program Files (x86)/Intel/oneAPI/compiler/latest/windows/bin/intel64/ifort.exe"
+          
+          echo "Finding MSVC cl.exe..."
+          for /f "delims=" %%i in ('where cl') do set "MSVC_CL_PATH=%%i"
+          echo "Found MSVC cl.exe at: %MSVC_CL_PATH%"
+          
+          echo "Temporarily renaming Node.js rc to avoid conflicts..."
+          if exist "node_modules\.bin\rc.exe" (
+            ren "node_modules\.bin\rc.exe" "rc.exe.bak"
+            echo "Renamed node_modules\.bin\rc.exe to rc.exe.bak"
+          )
+          if exist "node_modules\.bin\rc" (
+            ren "node_modules\.bin\rc" "rc.bak"
+            echo "Renamed node_modules\.bin\rc to rc.bak"
+          )
+          if exist "node_modules\.bin\rc.cmd" (
+            ren "node_modules\.bin\rc.cmd" "rc.cmd.bak"
+            echo "Renamed node_modules\.bin\rc.cmd to rc.cmd.bak"
+          )
+          if exist "node_modules\.bin\rc.ps1" (
+            ren "node_modules\.bin\rc.ps1" "rc.ps1.bak"
+            echo "Renamed node_modules\.bin\rc.ps1 to rc.ps1.bak"
+          )
+          
           npx cmake-js compile --arch=${{ matrix.cmake_arch }} ^
-            -G "Visual Studio 17 2022" -A x64 ^
-            --CDCMAKE_TOOLCHAIN_FILE=vcpkg\scripts\buildsystems\vcpkg.cmake ^
+            -G "NMake Makefiles" ^
+            --CDCMAKE_TOOLCHAIN_FILE=vcpkg/scripts/buildsystems/vcpkg.cmake ^
+            --CDCMAKE_C_COMPILER="%MSVC_CL_PATH%" ^
+            --CDCMAKE_CXX_COMPILER="%MSVC_CL_PATH%" ^
             --CDCMAKE_Fortran_COMPILER="%IFORT_PATH%" ^
             --verbose
+          
+          echo "Restoring Node.js rc tools..."
+          if exist "node_modules\.bin\rc.exe.bak" (
+            ren "node_modules\.bin\rc.exe.bak" "rc.exe"
+            echo "Restored node_modules\.bin\rc.exe"
+          )
+          if exist "node_modules\.bin\rc.bak" (
+            ren "node_modules\.bin\rc.bak" "rc"
+            echo "Restored node_modules\.bin\rc"
+          )
+          if exist "node_modules\.bin\rc.cmd.bak" (
+            ren "node_modules\.bin\rc.cmd.bak" "rc.cmd"
+            echo "Restored node_modules\.bin\rc.cmd"
+          )
+          if exist "node_modules\.bin\rc.ps1.bak" (
+            ren "node_modules\.bin\rc.ps1.bak" "rc.ps1"
+            echo "Restored node_modules\.bin\rc.ps1"
+          )
         shell: cmd
 
       # 7. 运行测试
@@ -336,4 +394,4 @@ jobs:
           path: |
             final-prebuilds/
             build-summary.md
-          retention-days: 90 
+          retention-days: 90

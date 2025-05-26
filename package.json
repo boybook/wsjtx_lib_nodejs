@@ -23,7 +23,7 @@
   "scripts": {
     "build": "npm run build:native && npm run build:ts",
     "build:native": "cmake-js compile",
-    "build:native:win": "cmake-js compile -G \"Visual Studio 17 2022\" -A x64 --CDCMAKE_TOOLCHAIN_FILE=vcpkg/scripts/buildsystems/vcpkg.cmake",
+    "build:native:win": "cmake-js compile -G \"NMake Makefiles\" --CDCMAKE_TOOLCHAIN_FILE=vcpkg/scripts/buildsystems/vcpkg.cmake --CDCMAKE_Fortran_COMPILER=\"C:/Program Files (x86)/Intel/oneAPI/compiler/latest/windows/bin/intel64/ifort.exe\"",
     "build:ts": "tsc",
     "clean": "cmake-js clean && rimraf dist",
     "test": "npm run build && node --test dist/test/wsjtx.basic.test.js",
