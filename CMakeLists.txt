@@ -221,18 +221,38 @@ else()
     endif()
 endif()
 
+# Auto-detect node-addon-api path (monorepo vs standalone)
+set(NODE_ADDON_API_PATHS
+    "${CMAKE_SOURCE_DIR}/node_modules/node-addon-api"           # Standalone project
+    "${CMAKE_SOURCE_DIR}/../../node_modules/node-addon-api"    # Monorepo (2 levels up)
+    "${CMAKE_SOURCE_DIR}/../../../node_modules/node-addon-api" # Monorepo (3 levels up)
+)
+
+set(NODE_ADDON_API_PATH "")
+foreach(path ${NODE_ADDON_API_PATHS})
+    if(EXISTS "${path}/napi.h")
+        set(NODE_ADDON_API_PATH "${path}")
+        message(STATUS "Found node-addon-api at: ${NODE_ADDON_API_PATH}")
+        break()
+    endif()
+endforeach()
+
+if(NOT NODE_ADDON_API_PATH)
+    message(FATAL_ERROR "Could not find node-addon-api. Searched paths: ${NODE_ADDON_API_PATHS}")
+endif()
+
 # Include directories
 if(WIN32 AND MSVC)
     include_directories(
         ${CMAKE_SOURCE_DIR}/wsjtx_lib
         ${CMAKE_SOURCE_DIR}/native
-        ${CMAKE_SOURCE_DIR}/node_modules/node-addon-api
+        ${NODE_ADDON_API_PATH}
     )
 else()
 include_directories(
     ${CMAKE_SOURCE_DIR}/wsjtx_lib
     ${CMAKE_SOURCE_DIR}/native
-    ${CMAKE_SOURCE_DIR}/node_modules/node-addon-api
+    ${NODE_ADDON_API_PATH}
     ${FFTW3F_INCLUDE_DIRS}
     ${Boost_INCLUDE_DIRS}
 )

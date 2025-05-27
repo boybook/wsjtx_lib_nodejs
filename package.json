@@ -21,6 +21,7 @@
     "LICENSE"
   ],
   "scripts": {
+    "prebuild": "prebuild-install",
     "build": "npm run build:native && npm run build:ts",
     "build:native": "cmake-js compile",
     "build:native:win": "cmake-js compile -G \"NMake Makefiles\" --CDCMAKE_TOOLCHAIN_FILE=vcpkg/scripts/buildsystems/vcpkg.cmake --CDCMAKE_Fortran_COMPILER=\"C:/Program Files (x86)/Intel/oneAPI/compiler/latest/windows/bin/intel64/ifort.exe\"",
@@ -30,8 +31,7 @@
     "test:basic": "npm run build && node --test dist/test/wsjtx.basic.test.js",
     "test:full": "npm run build && node --test dist/test/wsjtx.test.js",
     "test:only": "node --test dist/test/wsjtx.test.js",
-    "prepare": "npm run build:ts",
-    "install": "prebuild-install || npm run build:native"
+    "prepare": "npm run build:ts"
   },
   "keywords": [
     "wsjtx",
@@ -61,10 +61,10 @@
   "devDependencies": {
     "@types/node": "^20.0.0",
     "@types/wav": "^1.0.4",
-    "wav": "^1.0.2",
     "cmake-js": "^7.3.0",
     "rimraf": "^5.0.0",
-    "typescript": "^5.0.0"
+    "typescript": "^5.0.0",
+    "wav": "^1.0.2"
   },
   "engines": {
     "node": ">=16.0.0"
