@@ -152,6 +152,12 @@ jobs:
         Get-Content -Path package.json
         Write-Host "=== END PACKAGE.JSON ==="
         
+        # 安装全局依赖
+        Write-Host "=== INSTALLING GLOBAL DEPENDENCIES ==="
+        npm install -g node-gyp@9.4.0 --verbose
+        npm install -g cmake-js@7.2.1 --verbose
+        Write-Host "=== END INSTALLING GLOBAL DEPENDENCIES ==="
+        
         # 安装依赖并启用详细日志
         npm ci --verbose
         
@@ -164,6 +170,18 @@ jobs:
             Write-Host "=== NPM DEBUG LOG ==="
             Get-Content -Path npm-debug.log
             Write-Host "=== END NPM DEBUG LOG ==="
+          }
+          
+          # 显示 npm 缓存日志
+          $npmCacheLogs = "C:\npm\cache\_logs"
+          if (Test-Path -Path $npmCacheLogs) {
+            Write-Host "=== NPM CACHE LOGS ==="
+            Get-ChildItem -Path $npmCacheLogs -Filter "*.log" | Sort-Object LastWriteTime -Descending | Select-Object -First 3 | ForEach-Object {
+              Write-Host "=== LOG FILE: $($_.Name) ==="
+              Get-Content -Path $_.FullName
+              Write-Host "=== END LOG FILE: $($_.Name) ==="
+            }
+            Write-Host "=== END NPM CACHE LOGS ==="
           }
           
           exit $LASTEXITCODE
@@ -228,21 +246,28 @@ jobs:
         npm list node-gyp
         Write-Host "=== END NODE-GYP VERSION ==="
         
-        # 直接使用 npm 命令行参数，避免使用 Invoke-Expression
-        Write-Host "Running npm build with CMake arguments and verbose logging..."
+        # 检查 cmake-js 是否可用
+        Write-Host "=== CMAKE-JS VERSION ==="
+        npm list -g cmake-js
+        npm list cmake-js
+        Write-Host "=== END CMAKE-JS VERSION ==="
         
+        # 直接使用 build:native 命令，跳过 prebuild 步骤
+        Write-Host "=== RUNNING DIRECT BUILD:NATIVE COMMAND ==="
+        
+        # 尝试直接运行 build:native 命令
         if ($rcCompiler -and $fortranCompiler) {
           # 两个参数都存在
-          npm run build -- --verbose -- "-DCMAKE_RC_COMPILER=`"$rcCompiler`"" "-DCMAKE_Fortran_COMPILER=`"$fortranCompiler`""
+          npm run build:native -- -G "NMake Makefiles" --CDCMAKE_RC_COMPILER="$rcCompiler" --CDCMAKE_Fortran_COMPILER="$fortranCompiler" --verbose
         } elseif ($rcCompiler) {
           # 只有 RC 编译器
-          npm run build -- --verbose -- "-DCMAKE_RC_COMPILER=`"$rcCompiler`""
+          npm run build:native -- -G "NMake Makefiles" --CDCMAKE_RC_COMPILER="$rcCompiler" --verbose
         } elseif ($fortranCompiler) {
           # 只有 Fortran 编译器
-          npm run build -- --verbose -- "-DCMAKE_Fortran_COMPILER=`"$fortranCompiler`""
+          npm run build:native -- -G "NMake Makefiles" --CDCMAKE_Fortran_COMPILER="$fortranCompiler" --verbose
         } else {
           # 没有编译器参数
-          npm run build -- --verbose
+          npm run build:native -- -G "NMake Makefiles" --verbose
         }
         
         # 检查构建结果
@@ -254,6 +279,11 @@ jobs:
           npx node-gyp rebuild --verbose
           Write-Host "=== END NODE-GYP DIAGNOSTICS ==="
           
+          # 尝试直接使用 cmake-js 构建，获取更详细的错误信息
+          Write-Host "=== ATTEMPTING DIRECT CMAKE-JS BUILD FOR DIAGNOSTICS ==="
+          npx cmake-js rebuild --verbose
+          Write-Host "=== END CMAKE-JS DIAGNOSTICS ==="
+          
           # 检查构建日志
           Write-Host "=== CHECKING FOR BUILD LOGS ==="
           Get-ChildItem -Path . -Recurse -Filter "*.log" | ForEach-Object {
@@ -261,6 +291,21 @@ jobs:
             Write-Host "=== CONTENT OF $($_.Name) ==="
             Get-Content -Path $_.FullName
             Write-Host "=== END OF $($_.Name) ==="
+          }
+          
+          # 检查 CMake 缓存文件
+          Write-Host "=== CHECKING FOR CMAKE CACHE FILES ==="
+          if (Test-Path -Path "build/CMakeCache.txt") {
+            Write-Host "=== CONTENT OF CMakeCache.txt ==="
+            Get-Content -Path "build/CMakeCache.txt"
+            Write-Host "=== END OF CMakeCache.txt ==="
+          }
+          
+          # 检查 CMake 错误日志
+          if (Test-Path -Path "build/CMakeError.log") {
+            Write-Host "=== CONTENT OF CMakeError.log ==="
+            Get-Content -Path "build/CMakeError.log"
+            Write-Host "=== END OF CMakeError.log ==="
           }
           
           exit $LASTEXITCODE
@@ -297,9 +342,42 @@ jobs:
         name: ${{ runner.os }}-${{ matrix.arch }}-logs
         path: |
           build/**/*.log
+          build/CMakeCache.txt
+          build/CMakeError.log
+          build/CMakeOutput.log
           npm-debug.log*
           node_modules/**/*.log
           node_modules/**/*.gyp
           node_modules/.bin/
           .npm/_logs/
+        if-no-files-found: ignore
+        
+    - name: Upload npm cache logs (Windows)
+      if: runner.os == 'Windows' && always()
+      shell: powershell
+      run: |
+        $npmCacheLogs = "C:\npm\cache\_logs"
+        if (Test-Path -Path $npmCacheLogs) {
+          # 创建临时目录存放日志
+          New-Item -Path ".\npm_cache_logs" -ItemType Directory -Force
+          
+          # 复制最新的日志文件
+          Get-ChildItem -Path $npmCacheLogs -Filter "*.log" | 
+            Sort-Object LastWriteTime -Descending | 
+            Select-Object -First 10 | 
+            ForEach-Object {
+              Copy-Item -Path $_.FullName -Destination ".\npm_cache_logs\"
+            }
+          
+          Write-Host "Copied npm cache logs to .\npm_cache_logs\"
+        } else {
+          Write-Host "npm cache logs directory not found at $npmCacheLogs"
+        }
+
+    - name: Upload Windows npm cache logs
+      if: runner.os == 'Windows' && always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ runner.os }}-npm-cache-logs
+        path: npm_cache_logs/
         if-no-files-found: ignore
