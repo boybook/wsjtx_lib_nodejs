@@ -55,9 +55,21 @@ jobs:
     - name: Setup vcpkg & deps (Windows)
       if: runner.os == 'Windows'
       run: |
+        # 创建 vcpkg.json 文件，使用正确的 builtin-baseline
+        echo '{
+          "name": "wsjtx-lib-nodejs",
+          "version": "1.0.0",
+          "builtin-baseline": "a9eee3b18df395dbb8be71a31bd78ea441056e42"
+        }' > vcpkg.json
+        
+        # 克隆 vcpkg 仓库
         git clone https://github.com/microsoft/vcpkg.git
         cd vcpkg
+        
+        # 运行 bootstrap 脚本
         .\bootstrap-vcpkg.bat
+        
+        # 安装依赖
         .\vcpkg.exe install fftw3:x64-windows
 
     - name: Handle RC tool conflicts (Windows)
