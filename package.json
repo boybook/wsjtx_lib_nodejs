@@ -22,7 +22,7 @@
   ],
   "scripts": {
     "install": "node-gyp-build || npm run build:native",
-    "prebuild": "prebuildify",
+    "prebuild": "prebuild --all --strip",
     "build": "npm run build:native && npm run build:ts",
     "build:native": "cmake-js compile",
     "build:native:win": "cmake-js compile -G \"NMake Makefiles\" --CDCMAKE_TOOLCHAIN_FILE=vcpkg/scripts/buildsystems/vcpkg.cmake --CDCMAKE_Fortran_COMPILER=\"C:/Program Files (x86)/Intel/oneAPI/compiler/latest/windows/bin/intel64/ifort.exe\"",
@@ -56,14 +56,15 @@
     "url": "git+https://github.com/boybook/wsjtx-lib-nodejs.git"
   },
   "dependencies": {
-    "node-addon-api": "^8.3.1",
-    "node-gyp-build": "^4.6.1"
+    "node-addon-api": "^7.1.0",
+    "prebuild-install": "^7.1.1"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
     "@types/wav": "^1.0.4",
-    "cmake-js": "^7.3.0",
-    "prebuildify": "^5.0.1",
+    "cmake-js": "^7.2.1",
+    "node-gyp": "^9.4.0",
+    "prebuild": "^11.0.4",
     "rimraf": "^5.0.0",
     "typescript": "^5.0.0",
     "wav": "^1.0.2"
@@ -79,5 +80,10 @@
   "cpu": [
     "x64",
     "arm64"
-  ]
+  ],
+  "binary": {
+    "napi_versions": [
+      7
+    ]
+  }
 }
