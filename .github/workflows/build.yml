@@ -187,13 +187,14 @@ jobs:
       if: runner.os != 'Windows'
       run: |
         if [ "${{ runner.os }}" = "Linux" ]; then
-          # Linux 平台设置 Boost 路径
-          export BOOST_ROOT=/usr
-          npm run build:native -- -DBOOST_ROOT=/usr
+          # Linux 平台设置 Boost 路径 - 修复参数传递方式
+          export BOOST_ROOT="/usr"
+          npm run build:native -- -- -DBOOST_ROOT="/usr"
         elif [ "${{ runner.os }}" = "macOS" ]; then
-          # macOS 平台设置 Boost 路径
-          export BOOST_ROOT=$(brew --prefix boost)
-          npm run build:native -- -DBOOST_ROOT=$(brew --prefix boost)
+          # macOS 平台设置 Boost 路径 - 修复参数传递方式
+          BOOST_PATH=$(brew --prefix boost)
+          export BOOST_ROOT="$BOOST_PATH"
+          npm run build:native -- -- -DBOOST_ROOT="$BOOST_PATH"
         fi
       shell: bash
 
