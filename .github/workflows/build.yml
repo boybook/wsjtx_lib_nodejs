@@ -131,8 +131,48 @@ jobs:
     # ==========================================================================
     # === BUILD PROCESS ===
     # ==========================================================================
-    - name: Install npm dependencies
-      run: npm ci
+    - name: Install npm dependencies (Linux/macOS)
+      if: runner.os != 'Windows'
+      run: npm ci --verbose
+      
+    - name: Install npm dependencies (Windows)
+      if: runner.os == 'Windows'
+      shell: powershell
+      run: |
+        Write-Host "=== INSTALLING NPM DEPENDENCIES WITH VERBOSE LOGGING ==="
+        # 设置环境变量，强制从源代码构建
+        $env:npm_config_build_from_source = "true"
+        
+        # 显示 Node.js 和 npm 版本
+        node --version
+        npm --version
+        
+        # 显示 package.json 内容
+        Write-Host "=== PACKAGE.JSON CONTENT ==="
+        Get-Content -Path package.json
+        Write-Host "=== END PACKAGE.JSON ==="
+        
+        # 安装依赖并启用详细日志
+        npm ci --verbose
+        
+        # 检查安装结果
+        if ($LASTEXITCODE -ne 0) {
+          Write-Host "npm ci failed with exit code: $LASTEXITCODE"
+          
+          # 显示 npm 日志
+          if (Test-Path -Path npm-debug.log) {
+            Write-Host "=== NPM DEBUG LOG ==="
+            Get-Content -Path npm-debug.log
+            Write-Host "=== END NPM DEBUG LOG ==="
+          }
+          
+          exit $LASTEXITCODE
+        }
+        
+        # 列出已安装的依赖
+        Write-Host "=== INSTALLED DEPENDENCIES ==="
+        npm list --depth=1
+        Write-Host "=== END INSTALLED DEPENDENCIES ==="
 
     - name: Build project (Ubuntu/macOS)
       if: runner.os != 'Windows'
@@ -141,14 +181,14 @@ jobs:
           # Linux 平台设置 Fortran 编译器
           export FC=$(which gfortran)
           echo "Using Fortran compiler: $FC"
-          npm run build
+          npm run build -- --verbose
         elif [ "${{ runner.os }}" = "macOS" ]; then
           # macOS 平台设置 FFTW 路径和 Fortran 编译器
           FORTRAN_PATH=$(which gfortran)
           export FC="$FORTRAN_PATH"
           echo "Using Fortran compiler: $FORTRAN_PATH"
           echo "PKG_CONFIG_PATH: $PKG_CONFIG_PATH"
-          npm run build
+          npm run build -- --verbose
         fi
       shell: bash
 
@@ -156,7 +196,15 @@ jobs:
       if: runner.os == 'Windows'
       shell: powershell
       run: |
-        Write-Host "=== BUILDING PROJECT ON WINDOWS ==="
+        Write-Host "=== BUILDING PROJECT ON WINDOWS WITH VERBOSE LOGGING ==="
+        
+        # 设置环境变量，强制从源代码构建
+        $env:npm_config_build_from_source = "true"
+        
+        # 显示环境变量
+        Write-Host "=== ENVIRONMENT VARIABLES ==="
+        Get-ChildItem env: | Sort-Object Name | ForEach-Object { Write-Host "$($_.Name): $($_.Value)" }
+        Write-Host "=== END ENVIRONMENT VARIABLES ==="
         
         # 安全处理路径参数，确保所有路径都被正确引用
         $rcCompiler = ""
@@ -174,29 +222,61 @@ jobs:
           Write-Host "Fortran compiler path: $fortranCompiler"
         }
         
+        # 检查 node-gyp 是否可用
+        Write-Host "=== NODE-GYP VERSION ==="
+        npm list -g node-gyp
+        npm list node-gyp
+        Write-Host "=== END NODE-GYP VERSION ==="
+        
         # 直接使用 npm 命令行参数，避免使用 Invoke-Expression
-        Write-Host "Running npm build with CMake arguments..."
+        Write-Host "Running npm build with CMake arguments and verbose logging..."
         
         if ($rcCompiler -and $fortranCompiler) {
           # 两个参数都存在
-          npm run build -- -- "-DCMAKE_RC_COMPILER=`"$rcCompiler`"" "-DCMAKE_Fortran_COMPILER=`"$fortranCompiler`""
+          npm run build -- --verbose -- "-DCMAKE_RC_COMPILER=`"$rcCompiler`"" "-DCMAKE_Fortran_COMPILER=`"$fortranCompiler`""
         } elseif ($rcCompiler) {
           # 只有 RC 编译器
-          npm run build -- -- "-DCMAKE_RC_COMPILER=`"$rcCompiler`""
+          npm run build -- --verbose -- "-DCMAKE_RC_COMPILER=`"$rcCompiler`""
         } elseif ($fortranCompiler) {
           # 只有 Fortran 编译器
-          npm run build -- -- "-DCMAKE_Fortran_COMPILER=`"$fortranCompiler`""
+          npm run build -- --verbose -- "-DCMAKE_Fortran_COMPILER=`"$fortranCompiler`""
         } else {
           # 没有编译器参数
-          npm run build
+          npm run build -- --verbose
         }
         
+        # 检查构建结果
         if ($LASTEXITCODE -ne 0) {
           Write-Host "Build failed with exit code: $LASTEXITCODE"
+          
+          # 尝试直接使用 node-gyp 构建，获取更详细的错误信息
+          Write-Host "=== ATTEMPTING DIRECT NODE-GYP BUILD FOR DIAGNOSTICS ==="
+          npx node-gyp rebuild --verbose
+          Write-Host "=== END NODE-GYP DIAGNOSTICS ==="
+          
+          # 检查构建日志
+          Write-Host "=== CHECKING FOR BUILD LOGS ==="
+          Get-ChildItem -Path . -Recurse -Filter "*.log" | ForEach-Object {
+            Write-Host "Found log file: $($_.FullName)"
+            Write-Host "=== CONTENT OF $($_.Name) ==="
+            Get-Content -Path $_.FullName
+            Write-Host "=== END OF $($_.Name) ==="
+          }
+          
           exit $LASTEXITCODE
         }
         
         Write-Host "=== BUILD COMPLETE ==="
+        
+        # 列出生成的文件
+        Write-Host "=== GENERATED FILES ==="
+        if (Test-Path -Path "build") {
+          Get-ChildItem -Path "build" -Recurse | Select-Object FullName
+        }
+        if (Test-Path -Path "prebuilds") {
+          Get-ChildItem -Path "prebuilds" -Recurse | Select-Object FullName
+        }
+        Write-Host "=== END GENERATED FILES ==="
 
     # ==========================================================================
     # === UPLOAD ARTIFACTS ===
@@ -216,6 +296,10 @@ jobs:
       with:
         name: ${{ runner.os }}-${{ matrix.arch }}-logs
         path: |
-          build/*.log
+          build/**/*.log
           npm-debug.log*
+          node_modules/**/*.log
+          node_modules/**/*.gyp
+          node_modules/.bin/
+          .npm/_logs/
         if-no-files-found: ignore
