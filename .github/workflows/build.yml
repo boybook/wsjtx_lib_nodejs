@@ -277,7 +277,7 @@ jobs:
         npm install
         npm run build
 
-    - name: Build project (Windows) - Step 1: npm install
+    - name: Build project (Windows) - Step 1 - npm install
       if: runner.os == 'Windows'
       shell: powershell
       run: |
@@ -296,7 +296,7 @@ jobs:
         }
         Write-Host "=== END NPM INSTALL ==="
 
-    - name: Build project (Windows) - Step 2: CMake configuration
+    - name: Build project (Windows) - Step 2 - CMake configuration
       if: runner.os == 'Windows'
       shell: powershell
       run: |
@@ -336,7 +336,7 @@ jobs:
         }
         Write-Host "=== END CMAKE CONFIGURATION ==="
 
-    - name: Build project (Windows) - Step 3: CMake build
+    - name: Build project (Windows) - Step 3 - CMake build
       if: runner.os == 'Windows'
       shell: powershell
       run: |
@@ -376,6 +376,5 @@ jobs:
         path: |
           test_cmd_dir/
           test_ps_dir/
-          test_bash_dir/
           build_logs/
         if-no-files-found: ignore
