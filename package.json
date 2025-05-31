@@ -21,7 +21,8 @@
     "LICENSE"
   ],
   "scripts": {
-    "prebuild": "prebuild-install",
+    "install": "node-gyp-build || npm run build:native",
+    "prebuild": "prebuildify",
     "build": "npm run build:native && npm run build:ts",
     "build:native": "cmake-js compile",
     "build:native:win": "cmake-js compile -G \"NMake Makefiles\" --CDCMAKE_TOOLCHAIN_FILE=vcpkg/scripts/buildsystems/vcpkg.cmake --CDCMAKE_Fortran_COMPILER=\"C:/Program Files (x86)/Intel/oneAPI/compiler/latest/windows/bin/intel64/ifort.exe\"",
@@ -56,12 +57,13 @@
   },
   "dependencies": {
     "node-addon-api": "^8.3.1",
-    "prebuild-install": "^7.1.1"
+    "node-gyp-build": "^4.6.1"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
     "@types/wav": "^1.0.4",
     "cmake-js": "^7.3.0",
+    "prebuildify": "^5.0.1",
     "rimraf": "^5.0.0",
     "typescript": "^5.0.0",
     "wav": "^1.0.2"
