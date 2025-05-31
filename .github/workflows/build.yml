@@ -23,15 +23,14 @@ jobs:
 
     steps:
     # ==========================================================================
-    # === ULTRA-EARLY DIAGNOSTICS (WINDOWS ONLY) ===
-    # Temporarily remove all subsequent steps to isolate the earliest failure point
+    # === EARLY DIAGNOSTICS (WINDOWS ONLY) ===
     # ==========================================================================
 
-    - name: Ultra-Early Diagnostics - CMD
+    - name: Early Diagnostics - CMD
       if: runner.os == 'Windows'
       shell: cmd
       run: |
-        echo === ULTRA-EARLY DIAGNOSTICS: CMD ===
+        echo === EARLY DIAGNOSTICS: CMD ===
         echo Current Directory:
         cd
         echo.
@@ -41,34 +40,21 @@ jobs:
         echo Disk Space:
         wmic logicaldisk get Caption,Size,Freespace
         echo.
-        echo Environment Variables:
-        set
-        echo.
         echo Testing Directory Creation:
         mkdir test_cmd_dir || echo Failed to create test_cmd_dir
         echo Testing File Creation:
         echo Test content CMD > test_cmd_dir\test_cmd_file.txt || echo Failed to create test_cmd_file.txt
         echo Content of test_cmd_file.txt:
         type test_cmd_dir\test_cmd_file.txt || echo Failed to read test_cmd_file.txt
-        echo.
-        echo Directory Listing (Root):
-        dir C:\
-        echo.
-        echo Directory Listing (Current):
-        dir .
         echo === END CMD DIAGNOSTICS ===
 
-    - name: Ultra-Early Diagnostics - PowerShell
+    - name: Early Diagnostics - PowerShell
       if: runner.os == 'Windows'
       shell: powershell
       run: |
-        Write-Host "=== ULTRA-EARLY DIAGNOSTICS: POWERSHELL ==="
+        Write-Host "=== EARLY DIAGNOSTICS: POWERSHELL ==="
         Write-Host "Current Directory: $PWD"
         Write-Host "User: $env:USERNAME"
-        Write-Host "Disk Space:"
-        Get-PSDrive -PSProvider FileSystem
-        Write-Host "Environment Variables:"
-        Get-ChildItem Env: | Sort-Object Name | Format-Table -AutoSize
         Write-Host "Testing Directory Creation:"
         try {
           New-Item -ItemType Directory -Path "test_ps_dir" -Force -ErrorAction Stop
@@ -84,71 +70,312 @@ jobs:
         } catch {
           Write-Host "  Failed to create or read test_ps_file.txt: $_"
         }
-        Write-Host "Directory Listing (Root):"
-        Get-ChildItem -Path C:\ -Depth 0
-        Write-Host "Directory Listing (Current):"
-        Get-ChildItem -Path . -Force
         Write-Host "=== END POWERSHELL DIAGNOSTICS ==="
 
-    - name: Ultra-Early Diagnostics - Bash (Git Bash)
+    # ==========================================================================
+    # === CHECKOUT AND NODE.JS SETUP ===
+    # ==========================================================================
+
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        submodules: recursive
+
+    - name: Verify checkout - PowerShell
       if: runner.os == 'Windows'
-      shell: bash
+      shell: powershell
       run: |
-        echo "=== ULTRA-EARLY DIAGNOSTICS: BASH ==="
-        echo "Current Directory:"
-        pwd
-        echo
-        echo "User:"
-        whoami
-        echo
-        echo "Disk Space:"
-        df -h
-        echo
-        echo "Environment Variables:"
-        env | sort
-        echo
-        echo "Testing Directory Creation:"
-        mkdir test_bash_dir && echo "  test_bash_dir created successfully" || echo "  Failed to create test_bash_dir"
-        echo
-        echo "Testing File Creation:"
-        echo "Test content Bash" > test_bash_dir/test_bash_file.txt && echo "  test_bash_file.txt created successfully" || echo "  Failed to create test_bash_file.txt"
-        echo "  Content:"
-        cat test_bash_dir/test_bash_file.txt || echo "  Failed to read test_bash_file.txt"
-        echo
-        echo "Directory Listing (Root):"
-        ls -la /c/
-        echo
-        echo "Directory Listing (Current):"
-        ls -la .
-        echo "=== END BASH DIAGNOSTICS ==="
+        Write-Host "=== CHECKOUT VERIFICATION: POWERSHELL ==="
+        Write-Host "Current Directory: $PWD"
+        Write-Host "Repository Contents:"
+        Get-ChildItem -Path . -Force
+        
+        Write-Host "Package.json Content:"
+        if (Test-Path -Path "package.json") {
+          Get-Content -Path "package.json" | Select-Object -First 10
+          Write-Host "  package.json exists and is readable"
+        } else {
+          Write-Host "  ERROR: package.json not found!"
+        }
+        
+        Write-Host "CMakeLists.txt Content:"
+        if (Test-Path -Path "CMakeLists.txt") {
+          Get-Content -Path "CMakeLists.txt" | Select-Object -First 10
+          Write-Host "  CMakeLists.txt exists and is readable"
+        } else {
+          Write-Host "  ERROR: CMakeLists.txt not found!"
+        }
+        
+        Write-Host "Submodule Status:"
+        if (Test-Path -Path "wsjtx_lib") {
+          Get-ChildItem -Path "wsjtx_lib" -Force
+          Write-Host "  wsjtx_lib submodule exists"
+        } else {
+          Write-Host "  ERROR: wsjtx_lib submodule not found!"
+        }
+        Write-Host "=== END CHECKOUT VERIFICATION ==="
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+
+    - name: Verify Node.js - PowerShell
+      if: runner.os == 'Windows'
+      shell: powershell
+      run: |
+        Write-Host "=== NODE.JS VERIFICATION: POWERSHELL ==="
+        Write-Host "Node.js Version:"
+        node --version
+        Write-Host "NPM Version:"
+        npm --version
+        Write-Host "Node.js Path:"
+        where node
+        Write-Host "NPM Path:"
+        where npm
+        Write-Host "=== END NODE.JS VERIFICATION ==="
 
     # ==========================================================================
-    # === ALL SUBSEQUENT STEPS TEMPORARILY REMOVED FOR ULTRA-EARLY DEBUGGING ===
+    # === FORTRAN COMPILER SETUP ===
     # ==========================================================================
 
-    # - uses: actions/checkout@v4
-    #   with:
-    #     submodules: recursive
+    - name: Setup Fortran
+      uses: fortran-lang/setup-fortran@v1
+      if: runner.os == 'Windows'
+      with:
+        compiler: intel-classic
+        version: '2021.10'
 
-    # - name: Setup Node.js
-    #   uses: actions/setup-node@v4
-    #   with:
-    #     node-version: '20'
-
-    # ... (rest of the steps removed) ...
+    - name: Verify Fortran - PowerShell
+      if: runner.os == 'Windows'
+      shell: powershell
+      run: |
+        Write-Host "=== FORTRAN VERIFICATION: POWERSHELL ==="
+        Write-Host "Fortran Compiler Environment Variables:"
+        Write-Host "FC: $env:FC"
+        Write-Host "CC: $env:CC"
+        Write-Host "CXX: $env:CXX"
+        
+        Write-Host "Fortran Compiler Path:"
+        if (Test-Path -Path $env:FC) {
+          Write-Host "  $env:FC exists"
+        } else {
+          Write-Host "  ERROR: $env:FC does not exist!"
+        }
+        
+        Write-Host "Fortran Compiler Version:"
+        try {
+          $output = & $env:FC --version 2>&1
+          Write-Host $output
+        } catch {
+          Write-Host "  ERROR: Failed to get Fortran compiler version: $_"
+        }
+        
+        Write-Host "=== END FORTRAN VERIFICATION ==="
 
     # ==========================================================================
-    # === UPLOAD DIAGNOSTIC FILES (IF CREATED) ===
+    # === MSVC ENVIRONMENT SETUP ===
     # ==========================================================================
+
+    - name: Setup MSVC Environment
+      if: runner.os == 'Windows'
+      uses: ilammy/msvc-dev-cmd@v1
+
+    - name: Verify MSVC - PowerShell
+      if: runner.os == 'Windows'
+      shell: powershell
+      run: |
+        Write-Host "=== MSVC VERIFICATION: POWERSHELL ==="
+        Write-Host "MSVC Environment Variables:"
+        Write-Host "INCLUDE: $env:INCLUDE"
+        Write-Host "LIB: $env:LIB"
+        Write-Host "LIBPATH: $env:LIBPATH"
+        
+        Write-Host "RC Compiler Path:"
+        $rcPath = (Get-Command rc.exe -ErrorAction SilentlyContinue).Path
+        if ($rcPath) {
+          Write-Host "  RC compiler found at: $rcPath"
+          # Convert backslashes to forward slashes for CMake
+          $rcPathForward = $rcPath -replace '\\', '/'
+          Write-Host "  RC path with forward slashes: $rcPathForward"
+          # Set environment variable for later use
+          echo "CMAKE_RC_COMPILER=$rcPathForward" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+        } else {
+          Write-Host "  ERROR: RC compiler not found!"
+        }
+        
+        Write-Host "CL Compiler Path:"
+        $clPath = (Get-Command cl.exe -ErrorAction SilentlyContinue).Path
+        if ($clPath) {
+          Write-Host "  CL compiler found at: $clPath"
+        } else {
+          Write-Host "  ERROR: CL compiler not found!"
+        }
+        Write-Host "=== END MSVC VERIFICATION ==="
+
+    # ==========================================================================
+    # === DEPENDENCIES INSTALLATION ===
+    # ==========================================================================
+
+    - name: Install dependencies (Ubuntu)
+      if: runner.os == 'Linux'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y gfortran libfftw3-dev
+
+    - name: Install dependencies (macOS)
+      if: runner.os == 'macOS'
+      run: |
+        brew install gcc fftw
+        echo "PKG_CONFIG_PATH=/usr/local/opt/fftw/lib/pkgconfig:$PKG_CONFIG_PATH" >> $GITHUB_ENV
+        echo "FFTW3F_ROOT=/usr/local/opt/fftw" >> $GITHUB_ENV
+
+    - name: Install dependencies (Windows)
+      if: runner.os == 'Windows'
+      shell: powershell
+      run: |
+        Write-Host "=== INSTALLING DEPENDENCIES: WINDOWS ==="
+        # Install cmake-js globally
+        npm install -g cmake-js
+        
+        # Verify cmake-js installation
+        Write-Host "cmake-js Version:"
+        cmake-js --version
+        
+        Write-Host "cmake-js Path:"
+        where cmake-js
+        Write-Host "=== END DEPENDENCIES INSTALLATION ==="
+
+    # ==========================================================================
+    # === BUILD PREPARATION ===
+    # ==========================================================================
+
+    - name: Prepare build directory (Windows)
+      if: runner.os == 'Windows'
+      shell: powershell
+      run: |
+        Write-Host "=== PREPARING BUILD DIRECTORY: WINDOWS ==="
+        # Create build directory
+        New-Item -ItemType Directory -Path "build" -Force
+        Write-Host "Build directory created"
+        
+        # Create logs directory
+        New-Item -ItemType Directory -Path "build_logs" -Force
+        Write-Host "Logs directory created"
+        
+        # List directories to verify
+        Get-ChildItem -Path .
+        Write-Host "=== END BUILD PREPARATION ==="
+
+    # ==========================================================================
+    # === BUILD PROCESS ===
+    # ==========================================================================
+
+    - name: Build project (Ubuntu/macOS)
+      if: runner.os != 'Windows'
+      run: |
+        npm install
+        npm run build
+
+    - name: Build project (Windows) - Step 1: npm install
+      if: runner.os == 'Windows'
+      shell: powershell
+      run: |
+        Write-Host "=== NPM INSTALL: WINDOWS ==="
+        # Run npm install and capture output
+        $npmOutput = npm install 2>&1
+        $npmOutput | Out-File -FilePath "build_logs/npm_install.log" -Encoding utf8
+        $npmOutput
+        
+        # Verify node_modules
+        if (Test-Path -Path "node_modules") {
+          Write-Host "node_modules directory exists"
+          Get-ChildItem -Path "node_modules" -Directory | Select-Object -First 10 | ForEach-Object { Write-Host "  $_" }
+        } else {
+          Write-Host "ERROR: node_modules directory not found!"
+        }
+        Write-Host "=== END NPM INSTALL ==="
+
+    - name: Build project (Windows) - Step 2: CMake configuration
+      if: runner.os == 'Windows'
+      shell: powershell
+      run: |
+        Write-Host "=== CMAKE CONFIGURATION: WINDOWS ==="
+        # Build CMake command arguments
+        $cmakeArgs = @()
+        
+        # Add RC compiler path if available
+        if ($env:CMAKE_RC_COMPILER) {
+          $cmakeArgs += "-DCMAKE_RC_COMPILER=$env:CMAKE_RC_COMPILER"
+        }
+        
+        # Add Fortran compiler path if available
+        if ($env:FC) {
+          $cmakeArgs += "-DCMAKE_Fortran_COMPILER=$env:FC"
+        }
+        
+        # Display final CMake arguments
+        Write-Host "CMake Arguments:"
+        $cmakeArgs | ForEach-Object { Write-Host "  $_" }
+        
+        # Run cmake-js configure with the arguments
+        $cmakeCommand = "cmake-js configure $($cmakeArgs -join ' ')"
+        Write-Host "Running: $cmakeCommand"
+        
+        # Execute and capture output
+        $cmakeOutput = Invoke-Expression $cmakeCommand 2>&1
+        $cmakeOutput | Out-File -FilePath "build_logs/cmake_configure.log" -Encoding utf8
+        $cmakeOutput
+        
+        # Verify CMake cache
+        if (Test-Path -Path "build/CMakeCache.txt") {
+          Write-Host "CMakeCache.txt exists"
+          Get-Content -Path "build/CMakeCache.txt" | Select-Object -First 20
+        } else {
+          Write-Host "ERROR: CMakeCache.txt not found!"
+        }
+        Write-Host "=== END CMAKE CONFIGURATION ==="
+
+    - name: Build project (Windows) - Step 3: CMake build
+      if: runner.os == 'Windows'
+      shell: powershell
+      run: |
+        Write-Host "=== CMAKE BUILD: WINDOWS ==="
+        # Run cmake-js build
+        $buildOutput = cmake-js build 2>&1
+        $buildOutput | Out-File -FilePath "build_logs/cmake_build.log" -Encoding utf8
+        $buildOutput
+        
+        # List build directory contents
+        Write-Host "Build directory contents:"
+        if (Test-Path -Path "build") {
+          Get-ChildItem -Path "build" -Recurse | Select-Object -First 20 | ForEach-Object { Write-Host "  $_" }
+        } else {
+          Write-Host "ERROR: build directory not found!"
+        }
+        Write-Host "=== END CMAKE BUILD ==="
+
+    # ==========================================================================
+    # === UPLOAD ARTIFACTS ===
+    # ==========================================================================
+
+    - name: Upload build artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ runner.os }}-${{ matrix.arch }}
+        path: |
+          build/
+          build_logs/
+        if-no-files-found: ignore
 
     - name: Upload diagnostic files
       if: always() && runner.os == 'Windows'
       uses: actions/upload-artifact@v4
       with:
-        name: windows-ultra-early-diagnostics-${{ matrix.arch }}
+        name: windows-diagnostics-${{ matrix.arch }}
         path: |
           test_cmd_dir/
           test_ps_dir/
           test_bash_dir/
-        if-no-files-found: ignore # Don't fail if files weren't created
-
+          build_logs/
+        if-no-files-found: ignore
