@@ -49,13 +49,17 @@ jobs:
     - name: Install macOS dependencies
       if: runner.os == 'macOS'
       run: |
-        brew install pkgconf cmake gcc boost
+        brew install pkgconf cmake gcc boost fftw
         # 安装 gfortran
         brew reinstall gcc
         # 验证 Boost 安装
         brew list boost || true
         echo "Boost installation path: $(brew --prefix boost)"
         ls -la $(brew --prefix boost)/include || true
+        # 验证 fftw 安装
+        brew list fftw || true
+        echo "FFTW installation path: $(brew --prefix fftw)"
+        ls -la $(brew --prefix fftw)/include || true
         # 验证 Fortran 编译器
         gfortran --version
         # 设置 Fortran 编译器环境变量
@@ -152,6 +156,34 @@ jobs:
         echo "Setting up Intel oneAPI environment..."
         call "C:\Program Files (x86)\Intel\oneAPI\setvars.bat" intel64 vs2022
         
+        echo "Finding Intel Fortran compiler path..."
+        where ifort > ifort_path.txt
+        set /p IFORT_PATH=<ifort_path.txt
+        if not exist "%IFORT_PATH%" (
+          echo "Error: ifort.exe not found in PATH"
+          echo "Searching for ifort.exe in common locations..."
+          for %%d in (
+            "C:\Program Files (x86)\Intel\oneAPI\compiler\latest\windows\bin\intel64"
+            "C:\Program Files (x86)\Intel\oneAPI\compiler\2023.2.1\windows\bin\intel64"
+            "C:\Program Files (x86)\Intel\oneAPI\compiler\2023.2.0\windows\bin\intel64"
+            "C:\Program Files (x86)\Intel\oneAPI\compiler\2023.1.0\windows\bin\intel64"
+            "C:\Program Files (x86)\Intel\oneAPI\compiler\2023.0.0\windows\bin\intel64"
+          ) do (
+            if exist "%%d\ifort.exe" (
+              set "IFORT_PATH=%%d\ifort.exe"
+              echo "Found ifort at: !IFORT_PATH!"
+              goto :found_ifort
+            )
+          )
+          echo "Error: Could not find ifort.exe"
+          exit /b 1
+        )
+        
+        :found_ifort
+        echo "Found Intel Fortran compiler: %IFORT_PATH%"
+        echo "CMAKE_Fortran_COMPILER=%IFORT_PATH%">>%GITHUB_ENV%
+        echo "FC=%IFORT_PATH%">>%GITHUB_ENV%
+        
         echo "Verifying environment setup..."
         where ifort
         where cl
@@ -171,6 +203,10 @@ jobs:
         
         echo "Checking for RC compiler..."
         where rc
+        
+        echo "Checking environment variables..."
+        echo "CMAKE_Fortran_COMPILER: %CMAKE_Fortran_COMPILER%"
+        echo "FC: %FC%"
         
         echo "Listing environment variables..."
         set
@@ -203,15 +239,19 @@ jobs:
           echo "Using Fortran compiler: $FC"
           npm run build:native -- -- -DBOOST_ROOT="/usr" -DCMAKE_Fortran_COMPILER="$(which gfortran)"
         elif [ "${{ runner.os }}" = "macOS" ]; then
-          # macOS 平台设置 Boost 路径和 Fortran 编译器
+          # macOS 平台设置 Boost 路径、FFTW 路径和 Fortran 编译器
           BOOST_PATH=$(brew --prefix boost)
+          FFTW_PATH=$(brew --prefix fftw)
           FORTRAN_PATH=$(which gfortran)
           export BOOST_ROOT="$BOOST_PATH"
           export FC="$FORTRAN_PATH"
           export CMAKE_Fortran_COMPILER="$FORTRAN_PATH"
+          export PKG_CONFIG_PATH="$FFTW_PATH/lib/pkgconfig:$PKG_CONFIG_PATH"
           echo "Using Boost path: $BOOST_PATH"
+          echo "Using FFTW path: $FFTW_PATH"
           echo "Using Fortran compiler: $FORTRAN_PATH"
-          npm run build:native -- -- -DBOOST_ROOT="$BOOST_PATH" -DCMAKE_Fortran_COMPILER="$FORTRAN_PATH"
+          echo "PKG_CONFIG_PATH: $PKG_CONFIG_PATH"
+          npm run build:native -- -- -DBOOST_ROOT="$BOOST_PATH" -DCMAKE_Fortran_COMPILER="$FORTRAN_PATH" -DFFTW3F_ROOT="$FFTW_PATH"
         fi
       shell: bash
 
@@ -240,8 +280,13 @@ jobs:
         echo "Checking RC compiler path..."
         where rc
         
+        echo "Checking Fortran compiler path..."
+        where ifort
+        set /p IFORT_PATH=<ifort_path.txt
+        echo "Using Fortran compiler: %IFORT_PATH%"
+        
         echo "Building with cmake-js..."
-        npx cmake-js compile -G "NMake Makefiles" --CDCMAKE_TOOLCHAIN_FILE=vcpkg/scripts/buildsystems/vcpkg.cmake --CDCMAKE_Fortran_COMPILER="C:/Program Files (x86)/Intel/oneAPI/compiler/latest/windows/bin/intel64/ifort.exe" --CDCMAKE_RC_COMPILER="%ProgramFiles(x86)%\Windows Kits\10\bin\10.0.22621.0\x64\rc.exe"
+        npx cmake-js compile -G "NMake Makefiles" --CDCMAKE_TOOLCHAIN_FILE=vcpkg/scripts/buildsystems/vcpkg.cmake --CDCMAKE_Fortran_COMPILER="%IFORT_PATH%" --CDCMAKE_RC_COMPILER="%ProgramFiles(x86)%\Windows Kits\10\bin\10.0.22621.0\x64\rc.exe"
         
         echo "Native module build complete"
 
