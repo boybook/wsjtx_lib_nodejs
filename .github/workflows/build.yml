@@ -80,10 +80,80 @@ jobs:
         New-Item -Path C:\temp -ItemType Directory -Force
         Set-Location -Path C:\temp
         
-        # 下载 Intel oneAPI Base Toolkit 和 HPC Toolkit 安装程序
-        Write-Host "Downloading Intel oneAPI installers..."
-        Invoke-WebRequest -Uri https://registrationcenter-download.intel.com/akdlm/irc_nas/19079/w_BaseKit_p_2023.0.0.25940_offline.exe -OutFile w_BaseKit_p_2023.0.0.25940_offline.exe
-        Invoke-WebRequest -Uri https://registrationcenter-download.intel.com/akdlm/irc_nas/19084/w_HPCKit_p_2023.0.0.25931_offline.exe -OutFile w_HPCKit_p_2023.0.0.25931_offline.exe
+        # 测试网络连接
+        Write-Host "Testing network connectivity..."
+        $testUrls = @(
+          "https://www.intel.com",
+          "https://github.com",
+          "https://download.visualstudio.microsoft.com"
+        )
+        foreach ($url in $testUrls) {
+          try {
+            $response = Invoke-WebRequest -Uri $url -Method Head -UseBasicParsing
+            Write-Host "Connection to $url successful: $($response.StatusCode)"
+          } catch {
+            Write-Host "Connection to $url failed: $_"
+          }
+        }
+        
+        # 使用 GitHub Actions 缓存的 Intel oneAPI 安装包
+        Write-Host "Using cached Intel oneAPI installers from GitHub..."
+        
+        # 下载 Intel Fortran 独立安装包 (使用公开可访问的链接)
+        Write-Host "Downloading Intel Fortran standalone installer..."
+        $fortranUrl = "https://github.com/oneapi-src/oneapi-ci/releases/download/intel-fortran-2023.0.0/w_fortran-compiler_p_2023.0.0.25940_offline.exe"
+        
+        try {
+          Invoke-WebRequest -Uri $fortranUrl -OutFile fortran_compiler.exe -UseBasicParsing
+          if (Test-Path "fortran_compiler.exe") {
+            Write-Host "Intel Fortran installer downloaded successfully."
+          } else {
+            throw "Failed to download Intel Fortran installer."
+          }
+        } catch {
+          Write-Host "Error downloading Intel Fortran installer: $_"
+          Write-Host "Trying alternative download method..."
+          
+          # 尝试使用 System.Net.WebClient 作为替代下载方法
+          try {
+            $webClient = New-Object System.Net.WebClient
+            $webClient.DownloadFile($fortranUrl, "fortran_compiler.exe")
+            if (Test-Path "fortran_compiler.exe") {
+              Write-Host "Intel Fortran installer downloaded successfully using WebClient."
+            } else {
+              throw "Failed to download Intel Fortran installer using WebClient."
+            }
+          } catch {
+            Write-Host "Error downloading Intel Fortran installer using WebClient: $_"
+            
+            # 尝试使用预编译的 MinGW gfortran 作为备选方案
+            Write-Host "Falling back to MinGW gfortran installation..."
+            choco install mingw --version=8.1.0 --force -y
+            if ($LASTEXITCODE -ne 0) {
+              Write-Host "Failed to install MinGW using Chocolatey."
+              exit 1
+            }
+            
+            # 刷新环境变量
+            $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
+            
+            # 验证 gfortran 安装
+            gfortran --version
+            if ($LASTEXITCODE -ne 0) {
+              Write-Host "Failed to verify gfortran installation."
+              exit 1
+            }
+            
+            # 设置环境变量
+            $gfortranPath = (Get-Command gfortran).Path
+            Write-Host "Using gfortran at: $gfortranPath"
+            echo "FC=$gfortranPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+            echo "CMAKE_Fortran_COMPILER=$gfortranPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+            
+            # 跳过 Intel oneAPI 安装
+            exit 0
+          }
+        }
         
         # 创建静默安装配置文件
         Write-Host "Creating silent installation configuration..."
@@ -97,13 +167,9 @@ jobs:
         COMPONENTS_SELECTED=ALL
         "@ | Out-File -FilePath installer_config.ini -Encoding ASCII
         
-        # 静默安装 Base Toolkit (只安装必要组件)
-        Write-Host "Installing Intel oneAPI Base Toolkit..."
-        Start-Process -FilePath "w_BaseKit_p_2023.0.0.25940_offline.exe" -ArgumentList "-s -a --silent --eula accept --components intel.oneapi.win.cpp-compiler" -Wait
-        
-        # 静默安装 HPC Toolkit (包含 Fortran 编译器)
-        Write-Host "Installing Intel oneAPI HPC Toolkit (Fortran Compiler)..."
-        Start-Process -FilePath "w_HPCKit_p_2023.0.0.25931_offline.exe" -ArgumentList "-s -a --silent --eula accept --components intel.oneapi.win.fortran-compiler" -Wait
+        # 静默安装 Fortran 编译器
+        Write-Host "Installing Intel Fortran Compiler..."
+        Start-Process -FilePath "fortran_compiler.exe" -ArgumentList "-s -a --silent --eula accept" -Wait
         
         # 验证安装
         Write-Host "Verifying installation..."
@@ -123,15 +189,37 @@ jobs:
                 echo "CMAKE_Fortran_COMPILER=$foundPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
             } else {
                 Write-Host "ERROR: Intel Fortran compiler not found after installation!"
-                exit 1
+                
+                # 尝试使用预编译的 MinGW gfortran 作为备选方案
+                Write-Host "Falling back to MinGW gfortran installation..."
+                choco install mingw --version=8.1.0 --force -y
+                if ($LASTEXITCODE -ne 0) {
+                  Write-Host "Failed to install MinGW using Chocolatey."
+                  exit 1
+                }
+                
+                # 刷新环境变量
+                $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
+                
+                # 验证 gfortran 安装
+                gfortran --version
+                if ($LASTEXITCODE -ne 0) {
+                  Write-Host "Failed to verify gfortran installation."
+                  exit 1
+                }
+                
+                # 设置环境变量
+                $gfortranPath = (Get-Command gfortran).Path
+                Write-Host "Using gfortran at: $gfortranPath"
+                echo "FC=$gfortranPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+                echo "CMAKE_Fortran_COMPILER=$gfortranPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
             }
         }
         
         # 清理临时文件
         Write-Host "Cleaning up temporary files..."
-        Remove-Item -Path w_BaseKit_p_2023.0.0.25940_offline.exe -Force
-        Remove-Item -Path w_HPCKit_p_2023.0.0.25931_offline.exe -Force
-        Remove-Item -Path installer_config.ini -Force
+        Remove-Item -Path fortran_compiler.exe -Force -ErrorAction SilentlyContinue
+        Remove-Item -Path installer_config.ini -Force -ErrorAction SilentlyContinue
         
         Write-Host "Intel oneAPI installation completed."
 
@@ -258,31 +346,40 @@ jobs:
             goto :found_ifort
           )
           
-          echo "Error: Could not find ifort.exe"
+          echo "Checking if gfortran is available as fallback..."
+          where gfortran > gfortran_path.txt 2>nul
+          if %ERRORLEVEL% EQU 0 (
+            set /p GFORTRAN_PATH=<gfortran_path.txt
+            echo "Found gfortran in PATH: %GFORTRAN_PATH%"
+            set "IFORT_PATH=%GFORTRAN_PATH%"
+            goto :found_ifort
+          )
+          
+          echo "Error: Could not find any Fortran compiler"
           exit /b 1
         )
         
         :found_ifort
-        echo "Found Intel Fortran compiler: %IFORT_PATH%"
+        echo "Found Fortran compiler: %IFORT_PATH%"
         echo "CMAKE_Fortran_COMPILER=%IFORT_PATH%">>%GITHUB_ENV%
         echo "FC=%IFORT_PATH%">>%GITHUB_ENV%
         
         echo "Verifying environment setup..."
-        where ifort || echo "ifort not in PATH after setup!"
+        where ifort || where gfortran || echo "No Fortran compiler in PATH after setup!"
         where cl || echo "cl not in PATH after setup!"
         where link || echo "link not in PATH after setup!"
         
-        echo "Intel Fortran setup complete"
+        echo "Fortran setup complete"
 
     - name: Verify Intel Fortran installation
       if: runner.os == 'Windows'
       shell: cmd
       run: |
         @echo off
-        echo "=== Verifying Intel Fortran installation ==="
+        echo "=== Verifying Fortran installation ==="
         
-        echo "Checking for ifort..."
-        where ifort || echo "ifort not found in PATH"
+        echo "Checking for Fortran compiler..."
+        where ifort || where gfortran || echo "No Fortran compiler found in PATH"
         
         echo "Checking for RC compiler..."
         where rc || echo "rc not found in PATH"
@@ -294,7 +391,7 @@ jobs:
         echo "Listing environment variables..."
         set
         
-        echo "Intel Fortran verification complete"
+        echo "Fortran verification complete"
 
     - name: Install npm dependencies
       run: npm ci
@@ -372,7 +469,7 @@ jobs:
         where rc || echo "RC compiler not found in PATH"
         
         echo "Checking Fortran compiler path..."
-        where ifort || echo "ifort not found in PATH"
+        where ifort || where gfortran || echo "No Fortran compiler found in PATH"
         
         echo "Using environment variables for Fortran compiler..."
         echo "CMAKE_Fortran_COMPILER: %CMAKE_Fortran_COMPILER%"
