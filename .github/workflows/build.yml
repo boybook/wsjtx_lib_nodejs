@@ -142,61 +142,29 @@ jobs:
           echo CMAKE_PREFIX_PATH=%VCPKG_ROOT%\installed\x64-windows>>%GITHUB_ENV%
         shell: cmd
 
-      # 改进：更全面地处理 RC 工具冲突
+      # 改进：简化 RC 工具冲突处理
       - name: Handle RC tool conflicts (Windows)
         if: runner.os == 'Windows'
         run: |
-          @echo off
           echo "=== Handling RC tool conflicts ==="
-          
-          rem 查找所有可能的 RC 工具冲突
-          echo "Searching for Node.js RC tools..."
-          dir /s /b node_modules\.bin\rc* 2>nul
-          
-          rem 备份并移除所有 Node.js RC 工具
-          if exist "node_modules\.bin\rc" (
-            echo "Backing up node_modules\.bin\rc"
-            ren "node_modules\.bin\rc" "rc.nodejs.bak"
-          )
-          if exist "node_modules\.bin\rc.cmd" (
-            echo "Backing up node_modules\.bin\rc.cmd"
-            ren "node_modules\.bin\rc.cmd" "rc.cmd.nodejs.bak"
-          )
-          if exist "node_modules\.bin\rc.ps1" (
-            echo "Backing up node_modules\.bin\rc.ps1"
-            ren "node_modules\.bin\rc.ps1" "rc.ps1.nodejs.bak"
-          )
-          if exist "node_modules\.bin\rc.exe" (
-            echo "Backing up node_modules\.bin\rc.exe"
-            ren "node_modules\.bin\rc.exe" "rc.exe.nodejs.bak"
-          )
           
           rem 查找 Windows SDK RC 编译器
           echo "Finding Windows SDK RC compiler..."
           for /f "delims=" %%v in ('dir "%ProgramFiles(x86)%\Windows Kits\10\bin" /b /ad ^| sort /r') do (
             if exist "%ProgramFiles(x86)%\Windows Kits\10\bin\%%v\x64\rc.exe" (
               set "RC_PATH=%ProgramFiles(x86)%\Windows Kits\10\bin\%%v\x64\rc.exe"
-              echo "Found RC compiler: !RC_PATH!"
-              echo CMAKE_RC_COMPILER=!RC_PATH!>>%GITHUB_ENV%
+              echo "Found RC compiler: %RC_PATH%"
+              echo CMAKE_RC_COMPILER=%RC_PATH%>>%GITHUB_ENV%
               goto :found_rc
             )
           )
-          
           :found_rc
-          echo "RC compiler path set to environment"
           
-          rem 验证 RC 编译器可用性
-          if defined RC_PATH (
-            echo "Verifying RC compiler..."
-            "!RC_PATH!" /? >nul 2>&1
-            if !errorlevel! equ 0 (
-              echo "✅ RC compiler verified"
-            ) else (
-              echo "❌ RC compiler verification failed"
-            )
-          ) else (
-            echo "⚠️ RC compiler not found"
-          )
+          rem 简化 Node.js RC 工具处理
+          if exist "node_modules\.bin\rc.exe" del /q "node_modules\.bin\rc.exe"
+          if exist "node_modules\.bin\rc.cmd" del /q "node_modules\.bin\rc.cmd"
+          if exist "node_modules\.bin\rc.ps1" del /q "node_modules\.bin\rc.ps1"
+          if exist "node_modules\.bin\rc" del /q "node_modules\.bin\rc"
         shell: cmd
 
       # 改进：使用 fortran-lang/setup-fortran 动作并验证安装
@@ -211,7 +179,6 @@ jobs:
       - name: Verify Intel Fortran installation
         if: runner.os == 'Windows'
         run: |
-          @echo off
           echo "=== Verifying Intel Fortran installation ==="
           
           rem 检查 ifort 和 ifx 是否在 PATH 中
@@ -224,24 +191,24 @@ jobs:
           set "ONEAPI_ROOT="
           if exist "C:\Program Files (x86)\Intel\oneAPI" (
             set "ONEAPI_ROOT=C:\Program Files (x86)\Intel\oneAPI"
-            echo "Found oneAPI at: !ONEAPI_ROOT!"
+            echo "Found oneAPI at: %ONEAPI_ROOT%"
           ) else if exist "C:\Program Files\Intel\oneAPI" (
             set "ONEAPI_ROOT=C:\Program Files\Intel\oneAPI"
-            echo "Found oneAPI at: !ONEAPI_ROOT!"
+            echo "Found oneAPI at: %ONEAPI_ROOT%"
           ) else (
             echo "❌ Intel oneAPI installation not found"
           )
           
           rem 保存 Fortran 编译器路径到环境变量
           if defined ONEAPI_ROOT (
-            if exist "!ONEAPI_ROOT!\compiler\latest\windows\bin\intel64\ifort.exe" (
-              set "IFORT_PATH=!ONEAPI_ROOT!\compiler\latest\windows\bin\intel64\ifort.exe"
-              echo "Found ifort at: !IFORT_PATH!"
-              echo IFORT_PATH=!IFORT_PATH!>>%GITHUB_ENV%
-            ) else if exist "!ONEAPI_ROOT!\compiler\latest\windows\bin\ifx.exe" (
-              set "IFX_PATH=!ONEAPI_ROOT!\compiler\latest\windows\bin\ifx.exe"
-              echo "Found ifx at: !IFX_PATH!"
-              echo IFX_PATH=!IFX_PATH!>>%GITHUB_ENV%
+            if exist "%ONEAPI_ROOT%\compiler\latest\windows\bin\intel64\ifort.exe" (
+              set "IFORT_PATH=%ONEAPI_ROOT%\compiler\latest\windows\bin\intel64\ifort.exe"
+              echo "Found ifort at: %IFORT_PATH%"
+              echo IFORT_PATH=%IFORT_PATH%>>%GITHUB_ENV%
+            ) else if exist "%ONEAPI_ROOT%\compiler\latest\windows\bin\ifx.exe" (
+              set "IFX_PATH=%ONEAPI_ROOT%\compiler\latest\windows\bin\ifx.exe"
+              echo "Found ifx at: %IFX_PATH%"
+              echo IFX_PATH=%IFX_PATH%>>%GITHUB_ENV%
             )
           )
         shell: cmd
@@ -278,7 +245,6 @@ jobs:
       - name: Build native module (Windows MSVC)
         if: runner.os == 'Windows'
         run: |
-          @echo off
           echo "=== Building with MSVC toolchain ==="
           
           rem 清理构建目录
@@ -302,7 +268,7 @@ jobs:
           echo "Finding MSVC cl.exe..."
           for /f "delims=" %%i in ('where cl') do (
             set "MSVC_CL_PATH=%%i"
-            echo "Found MSVC cl.exe at: !MSVC_CL_PATH!"
+            echo "Found MSVC cl.exe at: %MSVC_CL_PATH%"
             goto :found_cl
           )
           :found_cl
@@ -315,11 +281,11 @@ jobs:
           rem 然后设置 Intel oneAPI 环境
           echo "Setting up Intel oneAPI environment..."
           if defined ONEAPI_ROOT (
-            if exist "!ONEAPI_ROOT!\setvars.bat" (
+            if exist "%ONEAPI_ROOT%\setvars.bat" (
               echo "Calling oneAPI setvars.bat..."
-              call "!ONEAPI_ROOT!\setvars.bat" || echo "⚠️ setvars.bat returned non-zero exit code"
+              call "%ONEAPI_ROOT%\setvars.bat" || echo "⚠️ setvars.bat returned non-zero exit code"
             ) else (
-              echo "⚠️ setvars.bat not found at !ONEAPI_ROOT!"
+              echo "⚠️ setvars.bat not found at %ONEAPI_ROOT%"
             )
           ) else if exist "C:\Program Files (x86)\Intel\oneAPI\setvars.bat" (
             echo "Calling Intel oneAPI setvars.bat from default location..."
@@ -338,9 +304,9 @@ jobs:
           rem 确定 Fortran 编译器路径
           set "FORTRAN_COMPILER="
           if defined IFORT_PATH (
-            set "FORTRAN_COMPILER=!IFORT_PATH!"
+            set "FORTRAN_COMPILER=%IFORT_PATH%"
           ) else if defined IFX_PATH (
-            set "FORTRAN_COMPILER=!IFX_PATH!"
+            set "FORTRAN_COMPILER=%IFX_PATH%"
           ) else (
             for /f "delims=" %%i in ('where ifort 2^>nul') do (
               set "FORTRAN_COMPILER=%%i"
@@ -358,15 +324,15 @@ jobs:
             exit /b 1
           )
           
-          echo "Using Fortran compiler: !FORTRAN_COMPILER!"
+          echo "Using Fortran compiler: %FORTRAN_COMPILER%"
           
           rem 确保 vcpkg 工具链文件路径正确
           set "VCPKG_TOOLCHAIN="
           if exist "vcpkg\scripts\buildsystems\vcpkg.cmake" (
             set "VCPKG_TOOLCHAIN=%CD%\vcpkg\scripts\buildsystems\vcpkg.cmake"
           ) else if defined VCPKG_ROOT (
-            if exist "!VCPKG_ROOT!\scripts\buildsystems\vcpkg.cmake" (
-              set "VCPKG_TOOLCHAIN=!VCPKG_ROOT!\scripts\buildsystems\vcpkg.cmake"
+            if exist "%VCPKG_ROOT%\scripts\buildsystems\vcpkg.cmake" (
+              set "VCPKG_TOOLCHAIN=%VCPKG_ROOT%\scripts\buildsystems\vcpkg.cmake"
             )
           )
           
@@ -375,43 +341,17 @@ jobs:
             exit /b 1
           )
           
-          echo "Using vcpkg toolchain: !VCPKG_TOOLCHAIN!"
+          echo "Using vcpkg toolchain: %VCPKG_TOOLCHAIN%"
           
           rem 执行构建，确保使用正确的编译器和工具链
           echo "Starting cmake-js compilation with NMake..."
           npx cmake-js compile --arch=${{ matrix.cmake_arch }} ^
             -G "NMake Makefiles" ^
-            --CDCMAKE_TOOLCHAIN_FILE="!VCPKG_TOOLCHAIN!" ^
-            --CDCMAKE_C_COMPILER="!MSVC_CL_PATH!" ^
-            --CDCMAKE_CXX_COMPILER="!MSVC_CL_PATH!" ^
-            --CDCMAKE_Fortran_COMPILER="!FORTRAN_COMPILER!" ^
+            --CDCMAKE_TOOLCHAIN_FILE="%VCPKG_TOOLCHAIN%" ^
+            --CDCMAKE_C_COMPILER="%MSVC_CL_PATH%" ^
+            --CDCMAKE_CXX_COMPILER="%MSVC_CL_PATH%" ^
+            --CDCMAKE_Fortran_COMPILER="%FORTRAN_COMPILER%" ^
             --verbose
-          
-          if %errorlevel% neq 0 (
-            echo "❌ Build failed with exit code %errorlevel%"
-            exit /b %errorlevel%
-          )
-          
-          echo "✅ Build completed successfully"
-          
-          rem 恢复 Node.js RC 工具
-          echo "Restoring Node.js RC tools..."
-          if exist "node_modules\.bin\rc.nodejs.bak" (
-            ren "node_modules\.bin\rc.nodejs.bak" "rc"
-            echo "Restored node_modules\.bin\rc"
-          )
-          if exist "node_modules\.bin\rc.cmd.nodejs.bak" (
-            ren "node_modules\.bin\rc.cmd.nodejs.bak" "rc.cmd"
-            echo "Restored node_modules\.bin\rc.cmd"
-          )
-          if exist "node_modules\.bin\rc.ps1.nodejs.bak" (
-            ren "node_modules\.bin\rc.ps1.nodejs.bak" "rc.ps1"
-            echo "Restored node_modules\.bin\rc.ps1"
-          )
-          if exist "node_modules\.bin\rc.exe.nodejs.bak" (
-            ren "node_modules\.bin\rc.exe.nodejs.bak" "rc.exe"
-            echo "Restored node_modules\.bin\rc.exe"
-          )
         shell: cmd
 
       # 7. 运行测试
