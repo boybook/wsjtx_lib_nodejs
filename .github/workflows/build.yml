@@ -158,29 +158,38 @@ jobs:
       run: |
         Write-Host "=== BUILDING PROJECT ON WINDOWS ==="
         
-        # Build CMake command arguments
-        $cmakeArgs = @()
+        # 安全处理路径参数，确保所有路径都被正确引用
+        $rcCompiler = ""
+        $fortranCompiler = ""
         
-        # Add RC compiler path if available
+        # 获取并安全处理 RC 编译器路径
         if ($env:CMAKE_RC_COMPILER) {
-          $cmakeArgs += "-DCMAKE_RC_COMPILER=$env:CMAKE_RC_COMPILER"
+          $rcCompiler = $env:CMAKE_RC_COMPILER -replace '\\', '/'
+          Write-Host "RC compiler path: $rcCompiler"
         }
         
-        # Add Fortran compiler path if available
+        # 获取并安全处理 Fortran 编译器路径
         if ($env:FC) {
-          $cmakeArgs += "-DCMAKE_Fortran_COMPILER=$env:FC"
+          $fortranCompiler = $env:FC -replace '\\', '/'
+          Write-Host "Fortran compiler path: $fortranCompiler"
         }
         
-        # Display final CMake arguments
-        Write-Host "CMake Arguments:"
-        $cmakeArgs | ForEach-Object { Write-Host "  $_" }
+        # 直接使用 npm 命令行参数，避免使用 Invoke-Expression
+        Write-Host "Running npm build with CMake arguments..."
         
-        # Run npm build with the arguments
-        $buildCommand = "npm run build -- -- $($cmakeArgs -join ' ')"
-        Write-Host "Running: $buildCommand"
-        
-        # Execute build command
-        Invoke-Expression $buildCommand
+        if ($rcCompiler -and $fortranCompiler) {
+          # 两个参数都存在
+          npm run build -- -- "-DCMAKE_RC_COMPILER=`"$rcCompiler`"" "-DCMAKE_Fortran_COMPILER=`"$fortranCompiler`""
+        } elseif ($rcCompiler) {
+          # 只有 RC 编译器
+          npm run build -- -- "-DCMAKE_RC_COMPILER=`"$rcCompiler`""
+        } elseif ($fortranCompiler) {
+          # 只有 Fortran 编译器
+          npm run build -- -- "-DCMAKE_Fortran_COMPILER=`"$fortranCompiler`""
+        } else {
+          # 没有编译器参数
+          npm run build
+        }
         
         if ($LASTEXITCODE -ne 0) {
           Write-Host "Build failed with exit code: $LASTEXITCODE"
