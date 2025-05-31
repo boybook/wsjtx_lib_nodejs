@@ -1,4 +1,4 @@
-name: Build and Package
+name: Build Windows
 
 on:
   push:
@@ -8,19 +8,8 @@ on:
 
 jobs:
   build:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-latest
-            arch: x64
-          - os: macos-latest
-            arch: arm64
-          - os: windows-latest
-            arch: x64
-
-    runs-on: ${{ matrix.os }}
-
+    runs-on: windows-latest
+    
     steps:
     # ==========================================================================
     # === CHECKOUT AND NODE.JS SETUP ===
@@ -37,32 +26,14 @@ jobs:
         cache: 'npm'
 
     # ==========================================================================
-    # === PLATFORM SPECIFIC DEPENDENCIES ===
-    # ==========================================================================
-    - name: Install Linux dependencies
-      if: runner.os == 'Linux'
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y gfortran libfftw3-dev
-
-    - name: Install macOS dependencies
-      if: runner.os == 'macOS'
-      run: |
-        brew install gcc fftw
-        echo "PKG_CONFIG_PATH=/usr/local/opt/fftw/lib/pkgconfig:$PKG_CONFIG_PATH" >> $GITHUB_ENV
-        echo "FFTW3F_ROOT=/usr/local/opt/fftw" >> $GITHUB_ENV
-
-    # ==========================================================================
     # === WINDOWS FORTRAN SETUP WITH CACHING ===
     # ==========================================================================
     - name: Get date for cache key
-      if: runner.os == 'Windows'
       id: get-date
       shell: bash
       run: echo "date=$(date +'%Y%m%d')" >> $GITHUB_OUTPUT
 
     - name: Setup Intel oneAPI cache
-      if: runner.os == 'Windows'
       id: cache-oneapi
       uses: actions/cache@v3
       with:
@@ -72,18 +43,15 @@ jobs:
           ${{ runner.os }}-oneapi-
 
     - name: Setup Fortran
-      if: runner.os == 'Windows'
       uses: fortran-lang/setup-fortran@v1
       with:
         compiler: intel-classic
         version: '2021.10'
 
     - name: Setup MSVC Environment
-      if: runner.os == 'Windows'
       uses: ilammy/msvc-dev-cmd@v1
 
-    - name: Verify Fortran and MSVC setup (Windows)
-      if: runner.os == 'Windows'
+    - name: Verify Fortran and MSVC setup
       shell: powershell
       run: |
         Write-Host "=== VERIFYING FORTRAN AND MSVC SETUP ==="
@@ -129,58 +97,85 @@ jobs:
         Write-Host "=== END VERIFICATION ==="
 
     # ==========================================================================
-    # === BUILD PROCESS ===
+    # === PREPARE PACKAGE.JSON FOR WINDOWS BUILD ===
     # ==========================================================================
-    - name: Install npm dependencies (Linux/macOS)
-      if: runner.os != 'Windows'
-      run: npm ci
-      
-    - name: Install npm dependencies (Windows)
-      if: runner.os == 'Windows'
+    - name: Prepare package.json for Windows build
       shell: powershell
       run: |
-        # 显示 Node.js 和 npm 版本
-        node --version
-        npm --version
+        Write-Host "=== PREPARING PACKAGE.JSON FOR WINDOWS BUILD ==="
+        
+        # 读取当前的 package.json
+        $packageJson = Get-Content -Path package.json -Raw | ConvertFrom-Json
+        
+        # 确保使用稳定版本的依赖
+        $packageJson.dependencies.'node-addon-api' = "^7.1.0"
+        $packageJson.dependencies.'prebuild-install' = "^7.1.1"
+        $packageJson.devDependencies.'node-gyp' = "^9.4.0"
+        $packageJson.devDependencies.'cmake-js' = "^7.2.1"
+        
+        # 更新安装脚本，确保 Windows 平台能正确处理
+        $packageJson.scripts.install = "prebuild-install || npm run build:native"
+        
+        # 保存修改后的 package.json
+        $packageJson | ConvertTo-Json -Depth 10 | Set-Content -Path package.json
+        
+        Write-Host "Updated package.json content:"
+        Get-Content -Path package.json
+        
+        Write-Host "=== PACKAGE.JSON PREPARATION COMPLETE ==="
+
+    # ==========================================================================
+    # === BUILD PROCESS ===
+    # ==========================================================================
+    - name: Install npm dependencies
+      shell: powershell
+      run: |
+        Write-Host "=== INSTALLING NPM DEPENDENCIES ==="
+        
+        # 重新生成 package-lock.json 以确保依赖一致性
+        if (Test-Path -Path package-lock.json) {
+          Remove-Item -Path package-lock.json -Force
+          Write-Host "Removed existing package-lock.json"
+        }
+        
+        # 安装全局依赖
+        npm install -g node-gyp@9.4.0
+        npm install -g cmake-js@7.2.1
+        
+        # 生成新的 package-lock.json
+        npm install --package-lock-only --ignore-scripts
+        Write-Host "Generated new package-lock.json"
         
         # 安装依赖
         npm ci
+        
+        Write-Host "=== NPM DEPENDENCIES INSTALLATION COMPLETE ==="
 
-    - name: Build project (Ubuntu/macOS)
-      if: runner.os != 'Windows'
-      run: |
-        if [ "${{ runner.os }}" = "Linux" ]; then
-          # Linux 平台设置 Fortran 编译器
-          export FC=$(which gfortran)
-          echo "Using Fortran compiler: $FC"
-          npm run build
-        elif [ "${{ runner.os }}" = "macOS" ]; then
-          # macOS 平台设置 FFTW 路径和 Fortran 编译器
-          FORTRAN_PATH=$(which gfortran)
-          export FC="$FORTRAN_PATH"
-          echo "Using Fortran compiler: $FORTRAN_PATH"
-          echo "PKG_CONFIG_PATH: $PKG_CONFIG_PATH"
-          npm run build
-        fi
-      shell: bash
-
-    - name: Build project (Windows)
-      if: runner.os == 'Windows'
+    - name: Build project
       shell: powershell
       run: |
+        Write-Host "=== BUILDING PROJECT ==="
+        
         # 获取并安全处理 RC 编译器路径
         $rcCompiler = ""
         if ($env:CMAKE_RC_COMPILER) {
           $rcCompiler = $env:CMAKE_RC_COMPILER -replace '\\', '/'
+          Write-Host "Using RC compiler: $rcCompiler"
         }
         
         # 获取并安全处理 Fortran 编译器路径
         $fortranCompiler = ""
         if ($env:FC) {
           $fortranCompiler = $env:FC -replace '\\', '/'
+          Write-Host "Using Fortran compiler: $fortranCompiler"
         }
         
-        # 根据不同情况构建命令
+        # 构建 TypeScript
+        Write-Host "Building TypeScript..."
+        npm run build:ts
+        
+        # 构建 native 模块
+        Write-Host "Building native module..."
         if ($rcCompiler -and $fortranCompiler) {
           # 两个参数都存在
           npm run build:native -- -G "NMake Makefiles" --CDCMAKE_RC_COMPILER="$rcCompiler" --CDCMAKE_Fortran_COMPILER="$fortranCompiler"
@@ -195,8 +190,7 @@ jobs:
           npm run build:native -- -G "NMake Makefiles"
         }
         
-        # 构建 TypeScript
-        npm run build:ts
+        Write-Host "=== BUILD COMPLETE ==="
 
     # ==========================================================================
     # === UPLOAD ARTIFACTS ===
@@ -204,7 +198,7 @@ jobs:
     - name: Upload build artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: ${{ runner.os }}-${{ matrix.arch }}
+        name: windows-x64
         path: |
           build/
           prebuilds/
@@ -214,11 +208,41 @@ jobs:
       if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: ${{ runner.os }}-${{ matrix.arch }}-logs
+        name: windows-x64-logs
         path: |
           build/**/*.log
           build/CMakeCache.txt
           build/CMakeError.log
           build/CMakeOutput.log
           npm-debug.log*
+        if-no-files-found: ignore
+        
+    - name: Upload npm cache logs
+      if: always()
+      shell: powershell
+      run: |
+        $npmCacheLogs = "C:\npm\cache\_logs"
+        if (Test-Path -Path $npmCacheLogs) {
+          # 创建临时目录存放日志
+          New-Item -Path ".\npm_cache_logs" -ItemType Directory -Force
+          
+          # 复制最新的日志文件
+          Get-ChildItem -Path $npmCacheLogs -Filter "*.log" | 
+            Sort-Object LastWriteTime -Descending | 
+            Select-Object -First 10 | 
+            ForEach-Object {
+              Copy-Item -Path $_.FullName -Destination ".\npm_cache_logs\"
+            }
+          
+          Write-Host "Copied npm cache logs to .\npm_cache_logs\"
+        } else {
+          Write-Host "npm cache logs directory not found at $npmCacheLogs"
+        }
+
+    - name: Upload Windows npm cache logs
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: windows-npm-cache-logs
+        path: npm_cache_logs/
         if-no-files-found: ignore
