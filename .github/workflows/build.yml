@@ -22,14 +22,159 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     steps:
+    # 超前调试步骤：输出系统信息和环境变量
+    - name: Early diagnostics - System info
+      shell: bash
+      run: |
+        echo "=== EARLY DIAGNOSTICS: SYSTEM INFO ==="
+        echo "OS: ${{ runner.os }}"
+        echo "Architecture: ${{ matrix.arch }}"
+        echo "Hostname: $(hostname)"
+        echo "Current directory: $(pwd)"
+        echo "Directory listing: $(ls -la)"
+        echo "Disk space:"
+        df -h || echo "df command not available"
+        echo "Memory info:"
+        free -h || echo "free command not available"
+        echo "User info:"
+        whoami || echo "whoami command not available"
+        echo "=== END SYSTEM INFO ==="
+
+    # 超前调试步骤：Windows 特定诊断
+    - name: Early diagnostics - Windows specific
+      if: runner.os == 'Windows'
+      shell: powershell
+      run: |
+        Write-Host "=== EARLY DIAGNOSTICS: WINDOWS SPECIFIC ==="
+        
+        # 输出系统信息
+        Write-Host "PowerShell version:"
+        $PSVersionTable
+        
+        # 检查磁盘空间
+        Write-Host "Disk space:"
+        Get-PSDrive -PSProvider FileSystem
+        
+        # 检查当前目录和权限
+        Write-Host "Current directory: $PWD"
+        Write-Host "Directory listing:"
+        Get-ChildItem -Force
+        
+        # 检查临时目录
+        Write-Host "Temp directory: $env:TEMP"
+        if (Test-Path $env:TEMP) {
+          Write-Host "Temp directory exists and is accessible"
+        } else {
+          Write-Host "Temp directory does not exist or is not accessible"
+        }
+        
+        # 检查环境变量
+        Write-Host "Path environment variable:"
+        $env:Path -split ";" | ForEach-Object { Write-Host "  $_" }
+        
+        # 尝试创建测试目录和文件
+        try {
+          Write-Host "Testing directory creation..."
+          New-Item -ItemType Directory -Path "test_dir" -Force
+          Write-Host "Testing file creation..."
+          "Test content" | Out-File -FilePath "test_dir/test_file.txt"
+          Write-Host "File content:"
+          Get-Content "test_dir/test_file.txt"
+          Write-Host "Directory and file creation successful"
+        } catch {
+          Write-Host "Error creating test directory or file: $_"
+        }
+        
+        # 检查 PowerShell 执行策略
+        Write-Host "PowerShell execution policy:"
+        Get-ExecutionPolicy
+        
+        Write-Host "=== END WINDOWS SPECIFIC ==="
+
+    # 超前调试步骤：创建并测试日志目录
+    - name: Early diagnostics - Test log directories
+      shell: bash
+      run: |
+        echo "=== TESTING LOG DIRECTORIES ==="
+        # 创建日志根目录
+        mkdir -p early_logs
+        echo "Created early_logs directory"
+        ls -la
+        
+        # 写入测试日志
+        echo "This is a test log entry at $(date)" > early_logs/test.log
+        echo "Log file content:"
+        cat early_logs/test.log
+        
+        # 测试 Windows 特定目录
+        if [ "${{ runner.os }}" = "Windows" ]; then
+          mkdir -p build_logs
+          echo "Created build_logs directory"
+          echo "This is a test build log at $(date)" > build_logs/test.log
+          echo "Build log content:"
+          cat build_logs/test.log
+          
+          mkdir -p build
+          echo "Created build directory"
+          echo "This is a test build file at $(date)" > build/test.txt
+          echo "Build file content:"
+          cat build/test.txt
+        fi
+        echo "=== END TESTING LOG DIRECTORIES ==="
+
     - uses: actions/checkout@v4
       with:
         submodules: recursive
+
+    # 超前调试步骤：检查代码库内容
+    - name: Early diagnostics - Repository content
+      shell: bash
+      run: |
+        echo "=== REPOSITORY CONTENT ==="
+        echo "Current directory: $(pwd)"
+        echo "Directory listing:"
+        ls -la
+        
+        echo "Checking key files:"
+        if [ -f "package.json" ]; then
+          echo "package.json exists"
+        else
+          echo "package.json does not exist!"
+        fi
+        
+        if [ -f "CMakeLists.txt" ]; then
+          echo "CMakeLists.txt exists"
+        else
+          echo "CMakeLists.txt does not exist!"
+        fi
+        
+        echo "Checking submodules:"
+        git submodule status
+        
+        echo "=== END REPOSITORY CONTENT ==="
 
     - name: Setup Node.js
       uses: actions/setup-node@v4
       with:
         node-version: '20'
+
+    # 超前调试步骤：检查 Node.js 环境
+    - name: Early diagnostics - Node.js environment
+      shell: bash
+      run: |
+        echo "=== NODE.JS ENVIRONMENT ==="
+        echo "Node.js version:"
+        node --version
+        echo "npm version:"
+        npm --version
+        
+        echo "npm config:"
+        npm config list
+        
+        echo "npm global packages:"
+        npm list -g --depth=0
+        
+        echo "=== END NODE.JS ENVIRONMENT ==="
 
     - name: Install Linux dependencies
       if: runner.os == 'Linux'
@@ -70,6 +215,43 @@ jobs:
       if: runner.os == 'Windows'
       uses: microsoft/setup-msbuild@v2
 
+    # 超前调试步骤：检查 Visual Studio 环境
+    - name: Early diagnostics - Visual Studio environment
+      if: runner.os == 'Windows'
+      shell: powershell
+      run: |
+        Write-Host "=== VISUAL STUDIO ENVIRONMENT ==="
+        
+        # 检查 MSBuild 是否可用
+        try {
+          $msbuildPath = (Get-Command msbuild -ErrorAction Stop).Source
+          Write-Host "MSBuild found at: $msbuildPath"
+          Write-Host "MSBuild version:"
+          & msbuild -version
+        } catch {
+          Write-Host "MSBuild not found in PATH: $_"
+        }
+        
+        # 检查 Visual Studio 安装路径
+        $vsPath = "C:\Program Files\Microsoft Visual Studio\2022\Enterprise"
+        if (Test-Path $vsPath) {
+          Write-Host "Visual Studio found at: $vsPath"
+          Write-Host "Visual Studio directory listing:"
+          Get-ChildItem -Path $vsPath -Directory | Select-Object Name
+        } else {
+          Write-Host "Visual Studio not found at expected path: $vsPath"
+        }
+        
+        # 检查 vcvars64.bat 是否存在
+        $vcvarsPath = "$vsPath\VC\Auxiliary\Build\vcvars64.bat"
+        if (Test-Path $vcvarsPath) {
+          Write-Host "vcvars64.bat found at: $vcvarsPath"
+        } else {
+          Write-Host "vcvars64.bat not found at expected path: $vcvarsPath"
+        }
+        
+        Write-Host "=== END VISUAL STUDIO ENVIRONMENT ==="
+
     # 使用官方推荐的 fortran-lang/setup-fortran 安装 Intel Fortran
     - name: Setup Intel Fortran (Windows)
       if: runner.os == 'Windows'
@@ -78,6 +260,41 @@ jobs:
       with:
         compiler: intel-classic
         version: '2021.10'
+
+    # 超前调试步骤：检查 Intel Fortran 安装
+    - name: Early diagnostics - Intel Fortran installation
+      if: runner.os == 'Windows'
+      shell: powershell
+      run: |
+        Write-Host "=== INTEL FORTRAN INSTALLATION ==="
+        
+        # 检查 Intel Fortran 编译器是否可用
+        try {
+          $ifortPath = (Get-Command ifort -ErrorAction Stop).Source
+          Write-Host "Intel Fortran compiler found at: $ifortPath"
+          Write-Host "Intel Fortran version:"
+          & ifort --version
+        } catch {
+          Write-Host "Intel Fortran compiler not found in PATH: $_"
+          Write-Host "PATH environment variable:"
+          $env:Path -split ";" | ForEach-Object { Write-Host "  $_" }
+        }
+        
+        # 检查 Intel oneAPI 安装路径
+        $oneapiPath = "C:\Program Files (x86)\Intel\oneAPI"
+        if (Test-Path $oneapiPath) {
+          Write-Host "Intel oneAPI found at: $oneapiPath"
+          Write-Host "oneAPI directory listing:"
+          Get-ChildItem -Path $oneapiPath -Directory | Select-Object Name
+        } else {
+          Write-Host "Intel oneAPI not found at expected path: $oneapiPath"
+        }
+        
+        # 检查环境变量
+        Write-Host "FC environment variable: $env:FC"
+        Write-Host "ONEAPI_ROOT environment variable: $env:ONEAPI_ROOT"
+        
+        Write-Host "=== END INTEL FORTRAN INSTALLATION ==="
 
     - name: Create vcpkg.json
       run: |
@@ -101,6 +318,42 @@ jobs:
         ./vcpkg.exe install fftw3:x64-windows boost:x64-windows
       shell: cmd
 
+    # 超前调试步骤：检查 vcpkg 安装
+    - name: Early diagnostics - vcpkg installation
+      if: runner.os == 'Windows'
+      shell: powershell
+      run: |
+        Write-Host "=== VCPKG INSTALLATION ==="
+        
+        # 检查 vcpkg 是否可用
+        if (Test-Path "vcpkg/vcpkg.exe") {
+          Write-Host "vcpkg.exe found"
+          Write-Host "vcpkg version:"
+          & ./vcpkg/vcpkg.exe version
+          
+          Write-Host "Installed packages:"
+          & ./vcpkg/vcpkg.exe list
+        } else {
+          Write-Host "vcpkg.exe not found"
+        }
+        
+        # 检查 vcpkg 安装的库
+        $fftw3Path = "vcpkg/installed/x64-windows/include/fftw3.h"
+        if (Test-Path $fftw3Path) {
+          Write-Host "FFTW3 headers found at: $fftw3Path"
+        } else {
+          Write-Host "FFTW3 headers not found at expected path: $fftw3Path"
+        }
+        
+        $boostPath = "vcpkg/installed/x64-windows/include/boost"
+        if (Test-Path $boostPath) {
+          Write-Host "Boost headers found at: $boostPath"
+        } else {
+          Write-Host "Boost headers not found at expected path: $boostPath"
+        }
+        
+        Write-Host "=== END VCPKG INSTALLATION ==="
+
     - name: Find RC compiler (Windows)
       if: runner.os == 'Windows'
       shell: powershell
@@ -121,6 +374,11 @@ jobs:
           echo "CMAKE_RC_COMPILER=$rcPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
         } else {
           Write-Host "RC compiler not found!"
+          
+          # 尝试查找所有可能的 RC 编译器位置
+          Write-Host "Searching for all possible RC compiler locations:"
+          Get-ChildItem -Path "C:/Program Files (x86)/Windows Kits" -Recurse -Filter "rc.exe" -ErrorAction SilentlyContinue | 
+            ForEach-Object { Write-Host "  $_" }
         }
         
         # 检查 node_modules\.bin 中是否有冲突的 RC 工具
@@ -133,32 +391,57 @@ jobs:
 
     - name: Verify Intel Fortran installation (Windows)
       if: runner.os == 'Windows'
-      shell: cmd
+      shell: powershell
       run: |
-        @echo off
-        echo "=== Verifying Intel Fortran installation ==="
+        Write-Host "=== Verifying Intel Fortran installation ==="
         
-        echo "Checking for Intel Fortran compiler..."
-        where ifort || (
-          echo "ERROR: Intel Fortran compiler (ifort) not found in PATH!"
-          echo "Node.js 原生扩展必须使用 Intel Fortran 编译器构建，不支持 MinGW gfortran。"
-          exit /b 1
-        )
+        # 检查 Intel Fortran 编译器是否可用
+        try {
+          $ifortPath = (Get-Command ifort -ErrorAction Stop).Source
+          Write-Host "Intel Fortran compiler found at: $ifortPath"
+          Write-Host "Intel Fortran version:"
+          & ifort --version
+        } catch {
+          Write-Host "ERROR: Intel Fortran compiler (ifort) not found in PATH!"
+          Write-Host "Node.js 原生扩展必须使用 Intel Fortran 编译器构建，不支持 MinGW gfortran。"
+          Write-Host "PATH environment variable:"
+          $env:Path -split ";" | ForEach-Object { Write-Host "  $_" }
+          exit 1
+        }
         
-        echo "Checking for RC compiler..."
-        where rc || echo "rc not found in PATH"
+        # 检查 RC 编译器是否可用
+        try {
+          $rcPath = (Get-Command rc -ErrorAction Stop).Source
+          Write-Host "RC compiler found at: $rcPath"
+        } catch {
+          Write-Host "RC compiler not found in PATH"
+        }
         
-        echo "Checking environment variables..."
-        echo "FC: %FC%"
-        echo "CMAKE_RC_COMPILER: %CMAKE_RC_COMPILER%"
+        # 检查环境变量
+        Write-Host "Environment variables:"
+        Write-Host "FC: $env:FC"
+        Write-Host "CMAKE_RC_COMPILER: $env:CMAKE_RC_COMPILER"
         
-        echo "Running ifort version check..."
-        ifort --version
-        
-        echo "Intel Fortran verification complete"
+        Write-Host "Intel Fortran verification complete"
 
     - name: Install npm dependencies
       run: npm ci
+
+    # 超前调试步骤：检查 npm 安装
+    - name: Early diagnostics - npm installation
+      shell: bash
+      run: |
+        echo "=== NPM INSTALLATION ==="
+        echo "Checking node_modules directory:"
+        ls -la node_modules || echo "node_modules directory not found"
+        
+        echo "Checking package.json:"
+        cat package.json
+        
+        echo "Checking installed packages:"
+        npm list --depth=0
+        
+        echo "=== END NPM INSTALLATION ==="
 
     - name: Fix package.json build script
       run: |
@@ -212,20 +495,36 @@ jobs:
         Write-Host "CMAKE_RC_COMPILER: $env:CMAKE_RC_COMPILER"
         
         # 创建日志目录
-        New-Item -ItemType Directory -Path "build_logs" -Force
+        try {
+          New-Item -ItemType Directory -Path "build_logs" -Force
+          Write-Host "Successfully created build_logs directory"
+          "Initial log entry at $(Get-Date)" | Out-File -FilePath "build_logs/init.log"
+        } catch {
+          Write-Host "Error creating build_logs directory: $_"
+        }
         
         # 检查 package.json 中的构建脚本
         Write-Host "Checking package.json build scripts:"
         Get-Content package.json | Select-String "build"
         
         # 检查 CMake 版本
-        cmake --version
+        try {
+          $cmakeVersion = (cmake --version)
+          Write-Host "CMake version: $cmakeVersion"
+        } catch {
+          Write-Host "Error checking CMake version: $_"
+        }
         
         # 检查 vcpkg 安装状态
         Write-Host "Checking vcpkg installation:"
         if (Test-Path "vcpkg/vcpkg.exe") {
             Write-Host "vcpkg.exe found"
-            ./vcpkg/vcpkg.exe list
+            try {
+              $vcpkgList = (./vcpkg/vcpkg.exe list)
+              Write-Host "Installed packages: $vcpkgList"
+            } catch {
+              Write-Host "Error listing vcpkg packages: $_"
+            }
         } else {
             Write-Host "vcpkg.exe not found"
         }
@@ -238,22 +537,57 @@ jobs:
         Write-Host "=== Step 1: CMake configure ==="
         
         # 设置 MSVC 环境
-        & "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
+        try {
+          $vcvarsPath = "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
+          if (Test-Path $vcvarsPath) {
+            Write-Host "Found vcvars64.bat at: $vcvarsPath"
+            # 使用 cmd /c 调用 vcvars64.bat 并返回到 PowerShell
+            cmd /c "call `"$vcvarsPath`" && set" | ForEach-Object {
+              if ($_ -match "^([^=]+)=(.*)$") {
+                $name = $matches[1]
+                $value = $matches[2]
+                # 只设置关键环境变量
+                if ($name -match "^(INCLUDE|LIB|LIBPATH|Path|VCINSTALLDIR|VCToolsInstallDir)$") {
+                  [System.Environment]::SetEnvironmentVariable($name, $value)
+                }
+              }
+            }
+            Write-Host "MSVC environment variables set"
+          } else {
+            Write-Host "vcvars64.bat not found at expected path: $vcvarsPath"
+          }
+        } catch {
+          Write-Host "Error setting MSVC environment: $_"
+        }
         
         # 检查编译器
         Write-Host "Checking Fortran compiler..."
-        & where.exe ifort
-        if ($LASTEXITCODE -ne 0) {
+        try {
+          $ifortPath = (Get-Command ifort -ErrorAction Stop).Source
+          Write-Host "Intel Fortran compiler found at: $ifortPath"
+        } catch {
           Write-Host "ERROR: Intel Fortran compiler (ifort) not found in PATH!"
           exit 1
         }
         
         Write-Host "Checking RC compiler..."
-        & where.exe rc
+        try {
+          $rcPath = (Get-Command rc -ErrorAction Stop).Source
+          Write-Host "RC compiler found at: $rcPath"
+        } catch {
+          Write-Host "RC compiler not found in PATH"
+        }
         
         # 创建构建目录
-        New-Item -ItemType Directory -Path "build" -Force
-        Set-Location build
+        try {
+          New-Item -ItemType Directory -Path "build" -Force
+          Write-Host "Successfully created build directory"
+          Set-Location build
+          Write-Host "Changed to build directory: $PWD"
+        } catch {
+          Write-Host "Error creating or changing to build directory: $_"
+          exit 1
+        }
         
         # 运行 CMake 配置
         $cmakeArgs = @(
@@ -273,26 +607,48 @@ jobs:
         }
         
         # 执行 CMake 配置，保存日志
-        & cmake $cmakeArgs 2>&1 | Tee-Object -FilePath "../build_logs/cmake_configure.log"
-        
-        # 检查 CMake 配置结果
-        if ($LASTEXITCODE -ne 0) {
-          Write-Host "CMake configuration failed!"
-          Get-Content "../build_logs/cmake_configure.log" | Select-String -Pattern "error", "Error", "ERROR"
+        try {
+          Write-Host "Running CMake with arguments: $cmakeArgs"
+          & cmake $cmakeArgs 2>&1 | Tee-Object -FilePath "../build_logs/cmake_configure.log"
+          
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "CMake configuration failed with exit code: $LASTEXITCODE"
+            if (Test-Path "../build_logs/cmake_configure.log") {
+              Write-Host "CMake configuration errors:"
+              Get-Content "../build_logs/cmake_configure.log" | Select-String -Pattern "error", "Error", "ERROR"
+            }
+            exit 1
+          } else {
+            Write-Host "CMake configuration succeeded"
+          }
+        } catch {
+          Write-Host "Exception during CMake configuration: $_"
           exit 1
         }
         
         # 返回项目根目录
         Set-Location ..
+        Write-Host "Changed back to project root: $PWD"
         
         # 保存 CMake 缓存文件以便调试
         if (Test-Path "build/CMakeCache.txt") {
-          Copy-Item "build/CMakeCache.txt" "build_logs/CMakeCache.txt"
+          try {
+            Copy-Item "build/CMakeCache.txt" "build_logs/CMakeCache.txt"
+            Write-Host "Copied CMakeCache.txt to build_logs directory"
+          } catch {
+            Write-Host "Error copying CMakeCache.txt: $_"
+          }
+        } else {
+          Write-Host "CMakeCache.txt not found in build directory"
         }
         
         # 列出生成的文件
-        Write-Host "Generated files in build directory:"
-        Get-ChildItem -Path "build" -Recurse | Select-Object -First 20
+        try {
+          Write-Host "Generated files in build directory:"
+          Get-ChildItem -Path "build" -Recurse | Select-Object -First 20
+        } catch {
+          Write-Host "Error listing build directory contents: $_"
+        }
 
     - name: Build native module step 2 - cmake-js compile (Windows)
       if: runner.os == 'Windows'
@@ -321,29 +677,44 @@ jobs:
         }
         
         # 执行构建命令，保存日志
-        & npx cmake-js $cmakeArgs 2>&1 | Tee-Object -FilePath "build_logs/cmake_js_compile.log"
-        
-        # 检查构建结果
-        if ($LASTEXITCODE -ne 0) {
-          Write-Host "cmake-js compilation failed!"
-          Get-Content "build_logs/cmake_js_compile.log" | Select-String -Pattern "error", "Error", "ERROR"
-        } else {
-          Write-Host "cmake-js compilation succeeded!"
+        try {
+          Write-Host "Running cmake-js with arguments: $cmakeArgs"
+          & npx cmake-js $cmakeArgs 2>&1 | Tee-Object -FilePath "build_logs/cmake_js_compile.log"
+          
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "cmake-js compilation failed with exit code: $LASTEXITCODE"
+            if (Test-Path "build_logs/cmake_js_compile.log") {
+              Write-Host "cmake-js compilation errors:"
+              Get-Content "build_logs/cmake_js_compile.log" | Select-String -Pattern "error", "Error", "ERROR"
+            }
+          } else {
+            Write-Host "cmake-js compilation succeeded"
+          }
+        } catch {
+          Write-Host "Exception during cmake-js compilation: $_"
         }
         
         # 检查是否生成了 .node 文件
-        Write-Host "Checking for .node files:"
-        $nodeFiles = Get-ChildItem -Path "build" -Recurse -Filter "*.node"
-        if ($nodeFiles) {
-          Write-Host "Found .node files:"
-          $nodeFiles | ForEach-Object { Write-Host $_.FullName }
-        } else {
-          Write-Host "No .node files found!"
+        try {
+          Write-Host "Checking for .node files:"
+          $nodeFiles = Get-ChildItem -Path "build" -Recurse -Filter "*.node" -ErrorAction SilentlyContinue
+          if ($nodeFiles) {
+            Write-Host "Found .node files:"
+            $nodeFiles | ForEach-Object { Write-Host $_.FullName }
+          } else {
+            Write-Host "No .node files found!"
+          }
+        } catch {
+          Write-Host "Error checking for .node files: $_"
         }
         
         # 列出构建目录内容
-        Write-Host "Build directory contents:"
-        Get-ChildItem -Path "build" -Recurse | Select-Object -First 30
+        try {
+          Write-Host "Build directory contents:"
+          Get-ChildItem -Path "build" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 30
+        } catch {
+          Write-Host "Error listing build directory contents: $_"
+        }
 
     - name: Run tests
       run: npm test || echo "Tests failed but continuing"
@@ -359,6 +730,14 @@ jobs:
         path: |
           build/Release/*.node
           prebuilds/
+
+    # 上传早期诊断日志，即使构建失败也能获取
+    - name: Upload early diagnostic logs
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ runner.os }}-${{ matrix.arch }}-early-logs
+        path: early_logs/
 
     # 上传构建日志，即使构建失败也能获取
     - name: Upload build logs (Windows)
