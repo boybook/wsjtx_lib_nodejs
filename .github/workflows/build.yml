@@ -2,464 +2,227 @@ name: Build and Package
 
 on:
   push:
-    branches: [ main, develop ]
-    tags: [ 'v*' ]
+    branches: [ main ]
   pull_request:
     branches: [ main ]
 
-env:
-  NODE_VERSION: '18'
-
 jobs:
   build:
-    name: Build on ${{ matrix.os }} (${{ matrix.arch }})
-    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          # Linux builds
           - os: ubuntu-latest
             arch: x64
-            node_arch: x64
-            cmake_arch: x86_64
-          
-          # macOS builds
           - os: macos-latest
             arch: arm64
-            node_arch: arm64
-            cmake_arch: arm64
-          
-          # Windows builds with MSVC
           - os: windows-latest
             arch: x64
-            node_arch: x64
-            cmake_arch: x64
+
+    runs-on: ${{ matrix.os }}
 
     steps:
-      # 1. 检出代码
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-          fetch-depth: 0
+    - uses: actions/checkout@v4
+      with:
+        submodules: recursive
 
-      # 2. 设置 Node.js 环境
-      - name: Setup Node.js
-        id: setup_node
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          architecture: ${{ matrix.node_arch }}
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
 
-      # 3. 安装系统依赖 - Linux
-      - name: Install Linux dependencies
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            cmake \
-            build-essential \
-            gfortran \
-            libfftw3-dev \
-            libboost-all-dev \
-            pkg-config
+    - name: Install Linux dependencies
+      if: runner.os == 'Linux'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y gfortran libfftw3-dev
 
-      # 3a. Linux ARM64 交叉编译设置
-      - name: Setup Linux ARM64 cross-compilation
-        if: runner.os == 'Linux' && matrix.arch == 'arm64'
-        run: |
-          sudo apt-get install -y \
-            gcc-aarch64-linux-gnu \
-            g++-aarch64-linux-gnu \
-            gfortran-aarch64-linux-gnu
-          # 添加 ARM64 架构支持
-          sudo dpkg --add-architecture arm64
-          sudo apt-get update
-          sudo apt-get install -y \
-            libfftw3-dev:arm64 \
-            libboost-all-dev:arm64
-          # 设置交叉编译环境变量
-          echo "CC=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
-          echo "CXX=aarch64-linux-gnu-g++" >> $GITHUB_ENV
-          echo "FC=aarch64-linux-gnu-gfortran" >> $GITHUB_ENV
+    - name: Setup Linux ARM64 cross-compilation
+      if: runner.os == 'Linux' && matrix.arch == 'arm64'
+      run: |
+        sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
 
-      # 3. 安装系统依赖 - macOS
-      - name: Install macOS dependencies
-        if: runner.os == 'macOS'
-        run: |
-          brew install cmake fftw boost gcc pkg-config
-          
-          # 根据架构设置不同的路径
-          if [ "${{ matrix.arch }}" = "arm64" ]; then
-            # Apple Silicon (ARM64)
-            BREW_PREFIX="/opt/homebrew"
-          else
-            # Intel (x64)
-            BREW_PREFIX="/usr/local"
-          fi
-          
-          # 确保brew路径在PATH中
-          echo "${BREW_PREFIX}/bin" >> $GITHUB_PATH
-          
-          # 验证gfortran安装并设置环境变量
-          echo "Checking gfortran installation..."
-          ls -la ${BREW_PREFIX}/bin/gfortran* || echo "gfortran not found"
-          
-          # 找到正确的gfortran路径并设置为环境变量
-          GFORTRAN_PATH=$(find ${BREW_PREFIX}/bin -name "gfortran*" | head -1)
-          if [ -n "$GFORTRAN_PATH" ] && [ -x "$GFORTRAN_PATH" ]; then
-            echo "Found gfortran at: $GFORTRAN_PATH"
-            echo "FC=$GFORTRAN_PATH" >> $GITHUB_ENV
-            echo "CMAKE_Fortran_COMPILER=$GFORTRAN_PATH" >> $GITHUB_ENV
-            
-            # 测试gfortran
-            $GFORTRAN_PATH --version || echo "gfortran test failed"
-          else
-            echo "ERROR: gfortran not found or not executable"
-            exit 1
-          fi
-          
-          # 设置库路径
-          echo "LIBRARY_PATH=${BREW_PREFIX}/lib:$LIBRARY_PATH" >> $GITHUB_ENV
-          echo "LD_LIBRARY_PATH=${BREW_PREFIX}/lib:$LD_LIBRARY_PATH" >> $GITHUB_ENV
+    - name: Install macOS dependencies
+      if: runner.os == 'macOS'
+      run: |
+        brew install pkgconf cmake
+        brew install gcc
 
-      # 3. Windows MSVC 环境设置
-      - name: Setup Visual Studio Build Tools
-        if: runner.os == 'Windows'
-        uses: microsoft/setup-msbuild@v1
+    - name: Setup Visual Studio Build Tools
+      if: runner.os == 'Windows'
+      uses: microsoft/setup-msbuild@v2
 
-      - name: Setup vcpkg & deps (Windows)
-        if: runner.os == 'Windows'
-        run: |
-          set VCPKG_ROOT=%CD%\vcpkg
-          git clone https://github.com/Microsoft/vcpkg.git %VCPKG_ROOT%
-          %VCPKG_ROOT%\bootstrap-vcpkg.bat
-          rem install float + threads variant so we get fftwf + multithread support
-          %VCPKG_ROOT%\vcpkg install fftw3[float,threads]:x64-windows boost:x64-windows
-          rem expose vcpkg-installed prefix to later cmake invocations
-          echo VCPKG_ROOT=%VCPKG_ROOT%>>%GITHUB_ENV%
-          echo CMAKE_PREFIX_PATH=%VCPKG_ROOT%\installed\x64-windows>>%GITHUB_ENV%
-        shell: cmd
+    - name: Setup vcpkg & deps (Windows)
+      if: runner.os == 'Windows'
+      run: |
+        git clone https://github.com/microsoft/vcpkg.git
+        cd vcpkg
+        .\bootstrap-vcpkg.bat
+        .\vcpkg.exe install fftw3:x64-windows
 
-      # 改进：简化 RC 工具冲突处理
-      - name: Handle RC tool conflicts (Windows)
-        if: runner.os == 'Windows'
-        run: |
-          echo "=== Handling RC tool conflicts ==="
-          
-          rem 查找 Windows SDK RC 编译器
-          echo "Finding Windows SDK RC compiler..."
-          for /f "delims=" %%v in ('dir "%ProgramFiles(x86)%\Windows Kits\10\bin" /b /ad ^| sort /r') do (
-            if exist "%ProgramFiles(x86)%\Windows Kits\10\bin\%%v\x64\rc.exe" (
-              set "RC_PATH=%ProgramFiles(x86)%\Windows Kits\10\bin\%%v\x64\rc.exe"
-              echo "Found RC compiler: %RC_PATH%"
-              echo CMAKE_RC_COMPILER=%RC_PATH%>>%GITHUB_ENV%
-              goto :found_rc
-            )
+    - name: Handle RC tool conflicts (Windows)
+      if: runner.os == 'Windows'
+      shell: cmd
+      run: |
+        @echo off
+        echo "=== Handling RC tool conflicts ==="
+        
+        echo "Finding Windows SDK RC compiler..."
+        for /f "delims=" %%v in ('dir "%ProgramFiles(x86)%\Windows Kits\10\bin" /b /ad ^| sort /r') do (
+          if exist "%ProgramFiles(x86)%\Windows Kits\10\bin\%%v\x64\rc.exe" (
+            set "RC_PATH=%ProgramFiles(x86)%\Windows Kits\10\bin\%%v\x64\rc.exe"
+            echo "Found RC compiler: %RC_PATH%"
+            echo CMAKE_RC_COMPILER=%RC_PATH%>>%GITHUB_ENV%
+            goto :found_rc
           )
-          :found_rc
-          
-          rem 简化 Node.js RC 工具处理
-          if exist "node_modules\.bin\rc.exe" del /q "node_modules\.bin\rc.exe"
-          if exist "node_modules\.bin\rc.cmd" del /q "node_modules\.bin\rc.cmd"
-          if exist "node_modules\.bin\rc.ps1" del /q "node_modules\.bin\rc.ps1"
-          if exist "node_modules\.bin\rc" del /q "node_modules\.bin\rc"
-        shell: cmd
+        )
+        :found_rc
+        
+        echo "Current directory structure of node_modules\.bin:"
+        if exist "node_modules\.bin" dir "node_modules\.bin"
+        
+        echo "Removing Node.js RC tools..."
+        if exist "node_modules\.bin\rc.exe" (
+          echo "Deleting node_modules\.bin\rc.exe"
+          del /f /q "node_modules\.bin\rc.exe"
+        )
+        if exist "node_modules\.bin\rc.cmd" (
+          echo "Deleting node_modules\.bin\rc.cmd"
+          del /f /q "node_modules\.bin\rc.cmd"
+        )
+        if exist "node_modules\.bin\rc.ps1" (
+          echo "Deleting node_modules\.bin\rc.ps1"
+          del /f /q "node_modules\.bin\rc.ps1"
+        )
+        if exist "node_modules\.bin\rc" (
+          echo "Deleting node_modules\.bin\rc"
+          del /f /q "node_modules\.bin\rc"
+        )
+        
+        echo "Temporarily renaming node_modules\.bin directory..."
+        if exist "node_modules\.bin" (
+          ren "node_modules\.bin" ".bin_temp"
+          echo "Renamed node_modules\.bin to node_modules\.bin_temp"
+        )
+        
+        echo "Setting RC compiler in PATH..."
+        set "PATH=%ProgramFiles(x86)%\Windows Kits\10\bin\10.0.22621.0\x64;%PATH%"
+        echo "PATH=%PATH%"
+        
+        echo "RC tool handling complete"
 
-      # 改进：使用 fortran-lang/setup-fortran 动作并验证安装
-      - name: Setup Intel Fortran
-        if: runner.os == 'Windows'
-        uses: fortran-lang/setup-fortran@v1
-        with:
-          compiler: intel-classic
-          version: '2021.10'
+    - name: Setup Intel Fortran
+      if: runner.os == 'Windows'
+      shell: cmd
+      run: |
+        @echo off
+        echo "=== Setting up Intel Fortran ==="
+        
+        echo "Setting up MSVC environment first..."
+        call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
+        
+        echo "Setting up Intel oneAPI environment..."
+        call "C:\Program Files (x86)\Intel\oneAPI\setvars.bat" intel64 vs2022
+        
+        echo "Verifying environment setup..."
+        where ifort
+        where cl
+        where link
+        
+        echo "Intel Fortran setup complete"
 
-      # 改进：更详细的 Fortran 编译器验证
-      - name: Verify Intel Fortran installation
-        if: runner.os == 'Windows'
-        run: |
-          echo "=== Verifying Intel Fortran installation ==="
-          
-          rem 检查 ifort 和 ifx 是否在 PATH 中
-          echo "Checking for Fortran compilers in PATH..."
-          where ifort 2>nul && echo "✅ ifort found in PATH" || echo "❌ ifort not found in PATH"
-          where ifx 2>nul && echo "✅ ifx found in PATH" || echo "❌ ifx not found in PATH"
-          
-          rem 查找 Intel oneAPI 安装路径
-          echo "Searching for Intel oneAPI installation..."
-          set "ONEAPI_ROOT="
-          if exist "C:\Program Files (x86)\Intel\oneAPI" (
-            set "ONEAPI_ROOT=C:\Program Files (x86)\Intel\oneAPI"
-            echo "Found oneAPI at: %ONEAPI_ROOT%"
-          ) else if exist "C:\Program Files\Intel\oneAPI" (
-            set "ONEAPI_ROOT=C:\Program Files\Intel\oneAPI"
-            echo "Found oneAPI at: %ONEAPI_ROOT%"
-          ) else (
-            echo "❌ Intel oneAPI installation not found"
-          )
-          
-          rem 保存 Fortran 编译器路径到环境变量
-          if defined ONEAPI_ROOT (
-            if exist "%ONEAPI_ROOT%\compiler\latest\windows\bin\intel64\ifort.exe" (
-              set "IFORT_PATH=%ONEAPI_ROOT%\compiler\latest\windows\bin\intel64\ifort.exe"
-              echo "Found ifort at: %IFORT_PATH%"
-              echo IFORT_PATH=%IFORT_PATH%>>%GITHUB_ENV%
-            ) else if exist "%ONEAPI_ROOT%\compiler\latest\windows\bin\ifx.exe" (
-              set "IFX_PATH=%ONEAPI_ROOT%\compiler\latest\windows\bin\ifx.exe"
-              echo "Found ifx at: %IFX_PATH%"
-              echo IFX_PATH=%IFX_PATH%>>%GITHUB_ENV%
-            )
-          )
-        shell: cmd
+    - name: Verify Intel Fortran installation
+      if: runner.os == 'Windows'
+      shell: cmd
+      run: |
+        @echo off
+        echo "=== Verifying Intel Fortran installation ==="
+        
+        echo "Checking for ifort..."
+        where ifort
+        
+        echo "Checking for RC compiler..."
+        where rc
+        
+        echo "Listing environment variables..."
+        set
+        
+        echo "Intel Fortran verification complete"
 
-      # 4. 安装 npm 依赖
-      - name: Install npm dependencies
-        run: npm ci --ignore-scripts
+    - name: Install npm dependencies
+      run: npm ci
 
-      # 5. 构建 TypeScript
-      - name: Build TypeScript
-        run: npm run build:ts
+    - name: Build TypeScript
+      run: npm run build
 
-      # 6. 构建原生模块 - Linux/macOS
-      - name: Build native module (Linux/macOS)
-        if: runner.os != 'Windows'
-        run: |
-          # 清理可能存在的CMake缓存
-          rm -rf build/
-          
-          if [ "${{ matrix.arch }}" = "arm64" ] && [ "${{ runner.os }}" = "Linux" ]; then
-            # Linux ARM64 交叉编译
-            npx cmake-js compile --arch=${{ matrix.cmake_arch }} \
-              --CDCMAKE_SYSTEM_NAME=Linux \
-              --CDCMAKE_SYSTEM_PROCESSOR=aarch64 \
-              --CDCMAKE_C_COMPILER=aarch64-linux-gnu-gcc \
-              --CDCMAKE_CXX_COMPILER=aarch64-linux-gnu-g++ \
-              --CDCMAKE_Fortran_COMPILER=aarch64-linux-gnu-gfortran
-          else
-            # 本地编译
-            npx cmake-js compile --arch=${{ matrix.cmake_arch }}
-          fi
+    - name: Build native module (Linux/macOS)
+      if: runner.os != 'Windows'
+      run: |
+        npm run rebuild
 
-      # 改进：优化 Windows 构建流程，确保正确的环境变量顺序
-      - name: Build native module (Windows MSVC)
-        if: runner.os == 'Windows'
-        run: |
-          echo "=== Building with MSVC toolchain ==="
-          
-          rem 清理构建目录
-          echo "Cleaning build directory..."
-          if exist build rmdir /s /q build
-          
-          rem 首先设置 MSVC 环境，确保使用正确的链接器
-          echo "Setting up MSVC environment first..."
-          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat" || (
-            echo "Trying Community edition..."
-            call "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvars64.bat" || (
-              echo "Trying Professional edition..."
-              call "C:\Program Files\Microsoft Visual Studio\2022\Professional\VC\Auxiliary\Build\vcvars64.bat" || (
-                echo "❌ Failed to set up MSVC environment"
-                exit /b 1
-              )
-            )
-          )
-          
-          rem 查找 MSVC cl.exe 路径
-          echo "Finding MSVC cl.exe..."
-          for /f "delims=" %%i in ('where cl') do (
-            set "MSVC_CL_PATH=%%i"
-            echo "Found MSVC cl.exe at: %MSVC_CL_PATH%"
-            goto :found_cl
-          )
-          :found_cl
-          
-          if not defined MSVC_CL_PATH (
-            echo "❌ MSVC cl.exe not found"
-            exit /b 1
-          )
-          
-          rem 然后设置 Intel oneAPI 环境
-          echo "Setting up Intel oneAPI environment..."
-          if defined ONEAPI_ROOT (
-            if exist "%ONEAPI_ROOT%\setvars.bat" (
-              echo "Calling oneAPI setvars.bat..."
-              call "%ONEAPI_ROOT%\setvars.bat" || echo "⚠️ setvars.bat returned non-zero exit code"
-            ) else (
-              echo "⚠️ setvars.bat not found at %ONEAPI_ROOT%"
-            )
-          ) else if exist "C:\Program Files (x86)\Intel\oneAPI\setvars.bat" (
-            echo "Calling Intel oneAPI setvars.bat from default location..."
-            call "C:\Program Files (x86)\Intel\oneAPI\setvars.bat" || echo "⚠️ setvars.bat returned non-zero exit code"
-          ) else (
-            echo "⚠️ Intel oneAPI setvars.bat not found"
-          )
-          
-          rem 验证编译器环境
-          echo "Verifying compilers after environment setup..."
-          where cl && echo "✅ MSVC cl available" || echo "❌ MSVC cl not available"
-          where link && echo "✅ MSVC link available" || echo "❌ MSVC link not available"
-          where ifort && echo "✅ ifort available" || echo "❌ ifort not available"
-          where ifx && echo "✅ ifx available" || echo "❌ ifx not available"
-          
-          rem 确定 Fortran 编译器路径
-          set "FORTRAN_COMPILER="
-          if defined IFORT_PATH (
-            set "FORTRAN_COMPILER=%IFORT_PATH%"
-          ) else if defined IFX_PATH (
-            set "FORTRAN_COMPILER=%IFX_PATH%"
-          ) else (
-            for /f "delims=" %%i in ('where ifort 2^>nul') do (
-              set "FORTRAN_COMPILER=%%i"
-              goto :found_fortran
-            )
-            for /f "delims=" %%i in ('where ifx 2^>nul') do (
-              set "FORTRAN_COMPILER=%%i"
-              goto :found_fortran
-            )
-          )
-          :found_fortran
-          
-          if not defined FORTRAN_COMPILER (
-            echo "❌ Fortran compiler not found"
-            exit /b 1
-          )
-          
-          echo "Using Fortran compiler: %FORTRAN_COMPILER%"
-          
-          rem 确保 vcpkg 工具链文件路径正确
-          set "VCPKG_TOOLCHAIN="
-          if exist "vcpkg\scripts\buildsystems\vcpkg.cmake" (
-            set "VCPKG_TOOLCHAIN=%CD%\vcpkg\scripts\buildsystems\vcpkg.cmake"
-          ) else if defined VCPKG_ROOT (
-            if exist "%VCPKG_ROOT%\scripts\buildsystems\vcpkg.cmake" (
-              set "VCPKG_TOOLCHAIN=%VCPKG_ROOT%\scripts\buildsystems\vcpkg.cmake"
-            )
-          )
-          
-          if not defined VCPKG_TOOLCHAIN (
-            echo "❌ vcpkg toolchain file not found"
-            exit /b 1
-          )
-          
-          echo "Using vcpkg toolchain: %VCPKG_TOOLCHAIN%"
-          
-          rem 执行构建，确保使用正确的编译器和工具链
-          echo "Starting cmake-js compilation with NMake..."
-          npx cmake-js compile --arch=${{ matrix.cmake_arch }} ^
-            -G "NMake Makefiles" ^
-            --CDCMAKE_TOOLCHAIN_FILE="%VCPKG_TOOLCHAIN%" ^
-            --CDCMAKE_C_COMPILER="%MSVC_CL_PATH%" ^
-            --CDCMAKE_CXX_COMPILER="%MSVC_CL_PATH%" ^
-            --CDCMAKE_Fortran_COMPILER="%FORTRAN_COMPILER%" ^
-            --verbose
-        shell: cmd
+    - name: Build native module (Windows MSVC)
+      if: runner.os == 'Windows'
+      shell: cmd
+      run: |
+        @echo off
+        echo "=== Building native module with MSVC ==="
+        
+        echo "Restoring node_modules\.bin directory..."
+        if exist "node_modules\.bin_temp" (
+          ren "node_modules\.bin_temp" ".bin"
+          echo "Restored node_modules\.bin_temp to node_modules\.bin"
+        )
+        
+        echo "Setting CMAKE_RC_COMPILER explicitly..."
+        set CMAKE_RC_COMPILER=%ProgramFiles(x86)%\Windows Kits\10\bin\10.0.22621.0\x64\rc.exe
+        
+        echo "Setting up MSVC environment..."
+        call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
+        
+        echo "Setting up Intel oneAPI environment..."
+        call "C:\Program Files (x86)\Intel\oneAPI\setvars.bat" intel64 vs2022
+        
+        echo "Checking RC compiler path..."
+        where rc
+        
+        echo "Building with cmake-js..."
+        npx cmake-js rebuild --CDCMAKE_RC_COMPILER="%ProgramFiles(x86)%\Windows Kits\10\bin\10.0.22621.0\x64\rc.exe"
+        
+        echo "Native module build complete"
 
-      # 7. 运行测试
-      - name: Run tests
-        run: |
-          # 显示编译后的文件结构
-          echo "📁 Checking compiled files structure:"
-          ls -la dist/ || echo "dist directory not found"
-          find dist -name "*.js" -type f || echo "No JS files found in dist"
-          
-          # 检查测试文件是否存在
-          if [ -f "dist/test/wsjtx.basic.test.js" ]; then
-            echo "✅ Basic test file found: dist/test/wsjtx.basic.test.js"
-            
-            # 检查原生模块是否存在
-            if [ -f "build/Release/wsjtx_lib_nodejs.node" ]; then
-              echo "✅ Native module found: build/Release/wsjtx_lib_nodejs.node"
-              # 运行基础测试
-              npm test
-            else
-              echo "❌ Native module not found! Cannot run tests."
-              exit 1
-            fi
-          else
-            echo "❌ Basic test file not found!"
-            exit 1
-          fi
-        shell: bash
+    - name: Run tests
+      run: npm test
 
-      # 8. 创建预构建二进制文件
-      - name: Create prebuilt binaries
-        run: |
-          # 创建目标目录
-          mkdir -p prebuilds/${{ matrix.os }}-${{ matrix.arch }}
-          
-          # 复制构建的 .node 文件
-          if [ "${{ runner.os }}" = "Windows" ]; then
-            cp build/Release/*.node prebuilds/${{ matrix.os }}-${{ matrix.arch }}/
-          else
-            cp build/Release/*.node prebuilds/${{ matrix.os }}-${{ matrix.arch }}/
-          fi
-          
-          # 显示构建结果
-          echo "构建完成的文件:"
-          ls -la prebuilds/${{ matrix.os }}-${{ matrix.arch }}/
-        shell: bash
+    - name: Create prebuilt binaries
+      run: npm run prebuild
 
-      # 9. 上传构建产物到 artifacts
-      - name: Upload build artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: prebuilt-${{ matrix.os }}-${{ matrix.arch }}
-          path: prebuilds/
-          retention-days: 30
-          if-no-files-found: error
+    - name: Upload build artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ runner.os }}-${{ matrix.arch }}-binaries
+        path: prebuilds/
 
-      # 10. 上传完整构建目录（用于调试）
-      - name: Upload build directory for debugging
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: build-debug-${{ matrix.os }}-${{ matrix.arch }}
-          path: build/
-          retention-days: 7
+    - name: Upload build directory for debugging
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ runner.os }}-${{ matrix.arch }}-build-debug
+        path: build/
 
-  # 汇总所有构建产物
   collect-artifacts:
-    name: Collect All Artifacts
     needs: build
     runs-on: ubuntu-latest
-    if: always() && needs.build.result == 'success'
-    
     steps:
-      - name: Download all build artifacts
-        uses: actions/download-artifact@v4
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
         with:
-          path: all-artifacts
-
-      - name: Organize artifacts
+          path: artifacts
+      - name: Collect All Artifacts
         run: |
-          mkdir -p final-prebuilds
-          
-          # 合并所有预构建文件
-          for artifact_dir in all-artifacts/prebuilt-*; do
-            if [ -d "$artifact_dir" ]; then
-              echo "处理 $artifact_dir"
-              cp -r "$artifact_dir"/* final-prebuilds/
-            fi
-          done
-          
-          # 显示最终结果
-          echo "所有平台的构建产物:"
-          find final-prebuilds -name "*.node" -exec ls -la {} \;
-          
-          # 创建构建摘要
-          echo "# 构建摘要" > build-summary.md
-          echo "构建时间: $(date)" >> build-summary.md
-          echo "## 支持的平台:" >> build-summary.md
-          find final-prebuilds -name "*.node" | while read file; do
-            platform=$(echo "$file" | cut -d'/' -f2)
-            echo "- $platform" >> build-summary.md
-          done
-
-      - name: Upload combined artifacts
+          mkdir -p dist
+          cp -r artifacts/*/* dist/
+      - name: Upload All Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: all-prebuilds
-          path: |
-            final-prebuilds/
-            build-summary.md
-          retention-days: 90
+          name: all-binaries
+          path: dist/
