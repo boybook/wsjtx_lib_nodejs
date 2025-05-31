@@ -199,11 +199,43 @@ jobs:
         fi
       shell: bash
 
-    - name: Build native module (Windows MSVC)
+    # 增强 Windows 构建日志和调试能力
+    - name: Prepare Windows build environment
       if: runner.os == 'Windows'
       shell: powershell
       run: |
-        Write-Host "=== Building native module with MSVC ==="
+        Write-Host "=== Preparing Windows build environment ==="
+        
+        # 检查环境变量
+        Write-Host "Environment variables:"
+        Write-Host "FC: $env:FC"
+        Write-Host "CMAKE_RC_COMPILER: $env:CMAKE_RC_COMPILER"
+        
+        # 创建日志目录
+        New-Item -ItemType Directory -Path "build_logs" -Force
+        
+        # 检查 package.json 中的构建脚本
+        Write-Host "Checking package.json build scripts:"
+        Get-Content package.json | Select-String "build"
+        
+        # 检查 CMake 版本
+        cmake --version
+        
+        # 检查 vcpkg 安装状态
+        Write-Host "Checking vcpkg installation:"
+        if (Test-Path "vcpkg/vcpkg.exe") {
+            Write-Host "vcpkg.exe found"
+            ./vcpkg/vcpkg.exe list
+        } else {
+            Write-Host "vcpkg.exe not found"
+        }
+
+    # 分步构建 Windows 原生模块，增强日志输出
+    - name: Build native module step 1 - CMake configure (Windows)
+      if: runner.os == 'Windows'
+      shell: powershell
+      run: |
+        Write-Host "=== Step 1: CMake configure ==="
         
         # 设置 MSVC 环境
         & "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
@@ -219,25 +251,99 @@ jobs:
         Write-Host "Checking RC compiler..."
         & where.exe rc
         
-        # 使用 PowerShell 构建，确保路径格式正确
-        Write-Host "Building with cmake-js..."
+        # 创建构建目录
+        New-Item -ItemType Directory -Path "build" -Force
+        Set-Location build
+        
+        # 运行 CMake 配置
         $cmakeArgs = @(
-          "compile",
+          "..",
           "-G", "NMake Makefiles",
-          "--CDCMAKE_TOOLCHAIN_FILE=vcpkg/scripts/buildsystems/vcpkg.cmake",
-          "--CDCMAKE_Fortran_COMPILER=$env:FC"
+          "-DCMAKE_TOOLCHAIN_FILE=../vcpkg/scripts/buildsystems/vcpkg.cmake"
         )
         
-        # 仅当 CMAKE_RC_COMPILER 环境变量存在时添加
+        # 添加 Fortran 编译器
+        if ($env:FC) {
+          $cmakeArgs += "-DCMAKE_Fortran_COMPILER=$env:FC"
+        }
+        
+        # 添加 RC 编译器
+        if ($env:CMAKE_RC_COMPILER) {
+          $cmakeArgs += "-DCMAKE_RC_COMPILER=$env:CMAKE_RC_COMPILER"
+        }
+        
+        # 执行 CMake 配置，保存日志
+        & cmake $cmakeArgs 2>&1 | Tee-Object -FilePath "../build_logs/cmake_configure.log"
+        
+        # 检查 CMake 配置结果
+        if ($LASTEXITCODE -ne 0) {
+          Write-Host "CMake configuration failed!"
+          Get-Content "../build_logs/cmake_configure.log" | Select-String -Pattern "error", "Error", "ERROR"
+          exit 1
+        }
+        
+        # 返回项目根目录
+        Set-Location ..
+        
+        # 保存 CMake 缓存文件以便调试
+        if (Test-Path "build/CMakeCache.txt") {
+          Copy-Item "build/CMakeCache.txt" "build_logs/CMakeCache.txt"
+        }
+        
+        # 列出生成的文件
+        Write-Host "Generated files in build directory:"
+        Get-ChildItem -Path "build" -Recurse | Select-Object -First 20
+
+    - name: Build native module step 2 - cmake-js compile (Windows)
+      if: runner.os == 'Windows'
+      shell: powershell
+      run: |
+        Write-Host "=== Step 2: cmake-js compile ==="
+        
+        # 使用 cmake-js 构建，详细输出
+        $cmakeArgs = @(
+          "compile",
+          "--debug",
+          "-G", "NMake Makefiles",
+          "--CDCMAKE_TOOLCHAIN_FILE=vcpkg/scripts/buildsystems/vcpkg.cmake"
+        )
+        
+        # 添加 Fortran 编译器
+        if ($env:FC) {
+          Write-Host "Using Fortran compiler: $env:FC"
+          $cmakeArgs += "--CDCMAKE_Fortran_COMPILER=$env:FC"
+        }
+        
+        # 添加 RC 编译器
         if ($env:CMAKE_RC_COMPILER) {
           Write-Host "Using RC compiler: $env:CMAKE_RC_COMPILER"
           $cmakeArgs += "--CDCMAKE_RC_COMPILER=$env:CMAKE_RC_COMPILER"
         }
         
-        # 执行构建命令
-        & npx cmake-js $cmakeArgs
+        # 执行构建命令，保存日志
+        & npx cmake-js $cmakeArgs 2>&1 | Tee-Object -FilePath "build_logs/cmake_js_compile.log"
         
-        Write-Host "Native module build complete"
+        # 检查构建结果
+        if ($LASTEXITCODE -ne 0) {
+          Write-Host "cmake-js compilation failed!"
+          Get-Content "build_logs/cmake_js_compile.log" | Select-String -Pattern "error", "Error", "ERROR"
+        } else {
+          Write-Host "cmake-js compilation succeeded!"
+        }
+        
+        # 检查是否生成了 .node 文件
+        Write-Host "Checking for .node files:"
+        $nodeFiles = Get-ChildItem -Path "build" -Recurse -Filter "*.node"
+        if ($nodeFiles) {
+          Write-Host "Found .node files:"
+          $nodeFiles | ForEach-Object { Write-Host $_.FullName }
+        } else {
+          Write-Host "No .node files found!"
+        }
+        
+        # 列出构建目录内容
+        Write-Host "Build directory contents:"
+        Get-ChildItem -Path "build" -Recurse | Select-Object -First 30
 
     - name: Run tests
       run: npm test || echo "Tests failed but continuing"
@@ -245,6 +351,7 @@ jobs:
     - name: Create prebuilt binaries
       run: npm run prebuild || echo "Prebuild failed but continuing"
 
+    # 增强构建产物上传，确保即使构建失败也能获取日志
     - name: Upload build artifacts
       uses: actions/upload-artifact@v4
       with:
@@ -253,6 +360,15 @@ jobs:
           build/Release/*.node
           prebuilds/
 
+    # 上传构建日志，即使构建失败也能获取
+    - name: Upload build logs (Windows)
+      if: runner.os == 'Windows' && always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ runner.os }}-${{ matrix.arch }}-build-logs
+        path: build_logs/
+
+    # 上传构建目录，即使构建失败也能获取
     - name: Upload build directory for debugging
       if: always()
       uses: actions/upload-artifact@v4
