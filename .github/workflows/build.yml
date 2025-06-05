@@ -438,8 +438,20 @@ jobs:
       - name: Create prebuilt binaries (Linux/macOS)
         if: runner.os != 'Windows'
         run: |
+          # 映射GitHub Actions平台名称到Node.js标准平台名称
+          case "${{ matrix.os }}" in
+            ubuntu-latest) PLATFORM_NAME="linux" ;;
+            macos-latest) PLATFORM_NAME="darwin" ;;
+            windows-latest) PLATFORM_NAME="win32" ;;
+            *) PLATFORM_NAME="${{ matrix.os }}" ;;
+          esac
+          
           # 创建目标目录
-          TARGET_DIR="prebuilds/${{ matrix.os }}-${{ matrix.arch }}"
+          TARGET_DIR="prebuilds/$PLATFORM_NAME-${{ matrix.arch }}"
+          echo "📁 Creating target directory: $TARGET_DIR"
+          echo "   • GitHub runner: ${{ matrix.os }}"  
+          echo "   • Node.js platform: $PLATFORM_NAME"
+          echo "   • Architecture: ${{ matrix.arch }}"
           mkdir -p "$TARGET_DIR"
           
           # 复制构建的 .node 文件 - 检查两个可能的位置
@@ -486,7 +498,8 @@ jobs:
           # 创建构建信息文件
           cat > "$TARGET_DIR/build-info.json" << EOF
           {
-            "platform": "${{ matrix.os }}",
+            "platform": "$PLATFORM_NAME",
+            "github_runner": "${{ matrix.os }}",
             "arch": "${{ matrix.arch }}",
             "node_version": "${{ env.NODE_VERSION }}",
             "build_time": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
@@ -512,9 +525,20 @@ jobs:
           echo "  • User: $(whoami)"
           echo ""
           
+          # 映射GitHub Actions平台名称到Node.js标准平台名称
+          case "${{ matrix.os }}" in
+            ubuntu-latest) PLATFORM_NAME="linux" ;;
+            macos-latest) PLATFORM_NAME="darwin" ;;
+            windows-latest) PLATFORM_NAME="win32" ;;
+            *) PLATFORM_NAME="${{ matrix.os }}" ;;
+          esac
+          
           # 创建目标目录
-          TARGET_DIR="prebuilds/${{ matrix.os }}-${{ matrix.arch }}"
+          TARGET_DIR="prebuilds/$PLATFORM_NAME-${{ matrix.arch }}"
           echo "📁 Creating target directory: $TARGET_DIR"
+          echo "   • GitHub runner: ${{ matrix.os }}"
+          echo "   • Node.js platform: $PLATFORM_NAME"
+          echo "   • Architecture: ${{ matrix.arch }}"
           mkdir -p "$TARGET_DIR"
           
           # 复制构建的 .node 文件 - 检查两个可能的位置
@@ -615,7 +639,8 @@ jobs:
           
           cat > "$TARGET_DIR/build-info.json" << EOF
           {
-            "platform": "${{ matrix.os }}",
+            "platform": "$PLATFORM_NAME",
+            "github_runner": "${{ matrix.os }}",
             "arch": "${{ matrix.arch }}",
             "node_version": "${{ env.NODE_VERSION }}",
             "build_time": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",

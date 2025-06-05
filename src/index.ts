@@ -62,15 +62,20 @@ function findNativeModule(): string {
   const possiblePaths = [
     // 1. Prebuilt binaries (npm packages) - highest priority
     path.resolve(__dirname, '..', 'prebuilds', `${platform}-${arch}`, 'wsjtx_lib_nodejs.node'),
-    path.resolve(__dirname, '..', 'prebuilds', `${platform}-latest-${arch}`, 'wsjtx_lib_nodejs.node'), // GitHub Actions format
     
-    // 2. Local development builds - second priority
+    // 2. GitHub Actions legacy format (for backward compatibility)
+    path.resolve(__dirname, '..', 'prebuilds', `${platform}-latest-${arch}`, 'wsjtx_lib_nodejs.node'),
+    path.resolve(__dirname, '..', 'prebuilds', `ubuntu-latest-${arch}`, 'wsjtx_lib_nodejs.node'), // Linux
+    path.resolve(__dirname, '..', 'prebuilds', `macos-latest-${arch}`, 'wsjtx_lib_nodejs.node'),  // macOS  
+    path.resolve(__dirname, '..', 'prebuilds', `windows-latest-${arch}`, 'wsjtx_lib_nodejs.node'), // Windows
+    
+    // 3. Local development builds - third priority
     // From dist/src/ - direct build output
     path.resolve(__dirname, '..', '..', 'build', 'wsjtx_lib_nodejs.node'),
     // From dist/src/ - Release subdirectory
     path.resolve(__dirname, '..', '..', 'build', 'Release', 'wsjtx_lib_nodejs.node'),
     
-    // 3. Direct build output (when running from src/)
+    // 4. Direct build output (when running from src/)
     path.resolve(__dirname, '..', 'build', 'wsjtx_lib_nodejs.node'),
     // Release subdirectory (MSVC, cmake default, etc.)
     path.resolve(__dirname, '..', 'build', 'Release', 'wsjtx_lib_nodejs.node'),
