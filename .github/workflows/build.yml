@@ -257,8 +257,9 @@ jobs:
             --no-retry \
             --verbose
 
-      # 10. 运行测试
-      - name: Run tests
+      # 10. 运行测试 - Linux/macOS
+      - name: Run tests (Linux/macOS)
+        if: runner.os != 'Windows'
         run: |
           echo "📁 Checking compiled files structure:"
           ls -la dist/ || echo "dist directory not found"
@@ -268,7 +269,7 @@ jobs:
           if [ -f "dist/test/wsjtx.basic.test.js" ]; then
             echo "✅ Basic test file found: dist/test/wsjtx.basic.test.js"
             
-            # 检查原生模块是否存在 - 使用旧版本的固定路径逻辑
+            # 检查原生模块是否存在
             if [ -f "build/Release/wsjtx_lib_nodejs.node" ]; then
               echo "✅ Native module found: build/Release/wsjtx_lib_nodejs.node"
               ls -la build/Release/wsjtx_lib_nodejs.node
@@ -295,8 +296,75 @@ jobs:
           fi
         shell: bash
 
-      # 11. 创建预构建二进制文件
-      - name: Create prebuilt binaries
+      # 10a. 运行测试 - Windows (PowerShell)
+      - name: Run tests (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          Write-Host "📁 Checking compiled files structure:" -ForegroundColor Cyan
+          
+          if (Test-Path "dist") {
+            Get-ChildItem -Path "dist" -Recurse | Where-Object { $_.Extension -eq ".js" } | Select-Object FullName
+          } else {
+            Write-Host "dist directory not found" -ForegroundColor Yellow
+          }
+          
+          # 检查测试文件是否存在
+          $testFile = "dist/test/wsjtx.basic.test.js"
+          if (Test-Path $testFile) {
+            Write-Host "✅ Basic test file found: $testFile" -ForegroundColor Green
+            
+            # 检查原生模块是否存在 - Windows特殊路径处理
+            $releaseModule = "build/Release/wsjtx_lib_nodejs.node"
+            $directModule = "build/wsjtx_lib_nodejs.node"
+            
+            if (Test-Path $releaseModule) {
+              Write-Host "✅ Native module found: $releaseModule" -ForegroundColor Green
+              Get-Item $releaseModule | Select-Object Name, Length, LastWriteTime
+              
+              # 运行基础测试
+              Write-Host "Running npm test..." -ForegroundColor Cyan
+              npm test
+              if ($LASTEXITCODE -ne 0) {
+                Write-Host "❌ Test failed with exit code: $LASTEXITCODE" -ForegroundColor Red
+                exit $LASTEXITCODE
+              }
+            } elseif (Test-Path $directModule) {
+              Write-Host "✅ Native module found: $directModule" -ForegroundColor Green
+              Get-Item $directModule | Select-Object Name, Length, LastWriteTime
+              
+              # 确保在正确位置
+              if (!(Test-Path "build/Release")) {
+                New-Item -ItemType Directory -Path "build/Release" -Force
+              }
+              Copy-Item $directModule "build/Release/wsjtx_lib_nodejs.node" -Force
+              Write-Host "Copied native module to build/Release/" -ForegroundColor Yellow
+              
+              # 运行基础测试
+              Write-Host "Running npm test..." -ForegroundColor Cyan
+              npm test
+              if ($LASTEXITCODE -ne 0) {
+                Write-Host "❌ Test failed with exit code: $LASTEXITCODE" -ForegroundColor Red
+                exit $LASTEXITCODE
+              }
+            } else {
+              Write-Host "❌ Native module not found! Searching for .node files..." -ForegroundColor Red
+              Get-ChildItem -Path . -Recurse -Filter "*.node" | Select-Object FullName
+              if ($?) {
+                Write-Host "No .node files found" -ForegroundColor Red
+              }
+              exit 1
+            }
+          } else {
+            Write-Host "❌ Basic test file not found!" -ForegroundColor Red
+            Write-Host "Available test files:" -ForegroundColor Yellow
+            Get-ChildItem -Path "dist" -Recurse -Filter "*.test.js" | Select-Object FullName
+            exit 1
+          }
+        shell: pwsh
+
+      # 11. 创建预构建二进制文件 - Linux/macOS
+      - name: Create prebuilt binaries (Linux/macOS)
+        if: runner.os != 'Windows'
         run: |
           # 创建目标目录
           TARGET_DIR="prebuilds/${{ matrix.os }}-${{ matrix.arch }}"
@@ -333,6 +401,56 @@ jobs:
           echo "构建信息:"
           cat "$TARGET_DIR/build-info.json"
         shell: bash
+
+      # 11a. 创建预构建二进制文件 - Windows (PowerShell)
+      - name: Create prebuilt binaries (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          # 创建目标目录
+          $targetDir = "prebuilds/${{ matrix.os }}-${{ matrix.arch }}"
+          Write-Host "Creating target directory: $targetDir" -ForegroundColor Cyan
+          New-Item -ItemType Directory -Path $targetDir -Force | Out-Null
+          
+          # 复制构建的 .node 文件 - 检查两个可能的位置
+          $releaseModule = "build/Release/wsjtx_lib_nodejs.node"
+          $directModule = "build/wsjtx_lib_nodejs.node"
+          
+          if (Test-Path $releaseModule) {
+            Copy-Item $releaseModule "$targetDir/" -Force
+            Write-Host "✅ Copied from build/Release/" -ForegroundColor Green
+          } elseif (Test-Path $directModule) {
+            Copy-Item $directModule "$targetDir/" -Force
+            Write-Host "✅ Copied from build/" -ForegroundColor Green
+          } else {
+            Write-Host "❌ Native module not found for packaging!" -ForegroundColor Red
+            exit 1
+          }
+          
+          # 显示构建结果
+          Write-Host "构建完成的文件:" -ForegroundColor Cyan
+          Get-ChildItem -Path $targetDir | Select-Object Name, Length, LastWriteTime
+          
+          # 获取文件大小
+          $nodeFile = Get-ChildItem -Path "$targetDir/*.node" | Select-Object -First 1
+          $fileSize = if ($nodeFile) { $nodeFile.Length } else { "unknown" }
+          
+          # 创建构建信息文件
+          $buildInfo = @{
+            platform = "${{ matrix.os }}"
+            arch = "${{ matrix.arch }}"
+            node_version = "${{ env.NODE_VERSION }}"
+            build_time = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+            cmake_arch = "${{ matrix.cmake_arch }}"
+            file_size = $fileSize
+          }
+          
+          $buildInfoJson = $buildInfo | ConvertTo-Json -Depth 2
+          $buildInfoPath = "$targetDir/build-info.json"
+          $buildInfoJson | Out-File -FilePath $buildInfoPath -Encoding UTF8
+          
+          Write-Host "构建信息:" -ForegroundColor Cyan
+          Get-Content $buildInfoPath
+        shell: pwsh
 
       # 12. 上传构建产物到 artifacts
       - name: Upload build artifacts
