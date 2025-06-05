@@ -22,7 +22,7 @@ jobs:
           - os: ubuntu-latest
             arch: x64
             node_arch: x64
-            cmake_arch: x64
+            cmake_arch: x86_64
           
           # macOS builds
           - os: macos-latest
@@ -257,48 +257,6 @@ jobs:
             --no-retry \
             --verbose
 
-      # 9. 查找并验证构建产物 (兼容不同构建目录结构)
-      - name: Find and verify build artifacts
-        id: find_artifacts
-        run: |
-          echo "=== Searching for build artifacts ==="
-          
-          # 定义可能的构建产物路径
-          POSSIBLE_PATHS=(
-            "build/wsjtx_lib_nodejs.node"
-            "build/Release/wsjtx_lib_nodejs.node" 
-            "build/Debug/wsjtx_lib_nodejs.node"
-          )
-          
-          FOUND_PATH=""
-          for path in "${POSSIBLE_PATHS[@]}"; do
-            if [ -f "$path" ]; then
-              echo "✅ Found native module at: $path"
-              FOUND_PATH="$path"
-              break
-            else
-              echo "❌ Not found: $path"
-            fi
-          done
-          
-          if [ -z "$FOUND_PATH" ]; then
-            echo "❌ Native module not found in any expected location!"
-            echo "Build directory contents:"
-            find build -type f -name "*.node" || echo "No .node files found"
-            find build -type f || echo "No files found in build directory"
-            exit 1
-          fi
-          
-          # 验证文件
-          ls -la "$FOUND_PATH"
-          file "$FOUND_PATH" || echo "file command not available"
-          
-          # 设置输出变量
-          echo "artifact_path=$FOUND_PATH" >> $GITHUB_OUTPUT
-          echo "artifact_dir=$(dirname $FOUND_PATH)" >> $GITHUB_OUTPUT
-          echo "artifact_name=$(basename $FOUND_PATH)" >> $GITHUB_OUTPUT
-        shell: bash
-
       # 10. 运行测试
       - name: Run tests
         run: |
@@ -310,30 +268,22 @@ jobs:
           if [ -f "dist/test/wsjtx.basic.test.js" ]; then
             echo "✅ Basic test file found: dist/test/wsjtx.basic.test.js"
             
-            # 检查原生模块是否存在 (使用步骤9找到的路径)
-            ARTIFACT_PATH="${{ steps.find_artifacts.outputs.artifact_path }}"
-            if [ -f "$ARTIFACT_PATH" ]; then
-              echo "✅ Native module found: $ARTIFACT_PATH"
-              
-              # 确保原生模块在正确的位置
-              if [ "${{ runner.os }}" = "Windows" ]; then
-                # Windows: 直接使用找到的路径
-                echo "Using native module at: $ARTIFACT_PATH"
-                # 验证文件存在
-                ls -la "$ARTIFACT_PATH"
-              else
-                # Unix: 复制到build目录
-                mkdir -p build
-                cp "$ARTIFACT_PATH" build/
-                echo "Copied native module to build directory"
-                ls -la build/wsjtx_lib_nodejs.node
-              fi
-              
+            # 检查原生模块是否存在 - 使用旧版本的固定路径逻辑
+            if [ -f "build/Release/wsjtx_lib_nodejs.node" ]; then
+              echo "✅ Native module found: build/Release/wsjtx_lib_nodejs.node"
+              ls -la build/Release/wsjtx_lib_nodejs.node
+              # 运行基础测试
+              npm test
+            elif [ -f "build/wsjtx_lib_nodejs.node" ]; then
+              echo "✅ Native module found: build/wsjtx_lib_nodejs.node"
+              ls -la build/wsjtx_lib_nodejs.node
+              # 确保在正确位置，某些系统可能需要Release子目录
+              mkdir -p build/Release
+              cp build/wsjtx_lib_nodejs.node build/Release/
               # 运行基础测试
               npm test
             else
-              echo "❌ Native module not found at: $ARTIFACT_PATH"
-              echo "Searching for .node files..."
+              echo "❌ Native module not found! Searching for .node files..."
               find . -name "*.node" || echo "No .node files found"
               exit 1
             fi
@@ -352,9 +302,17 @@ jobs:
           TARGET_DIR="prebuilds/${{ matrix.os }}-${{ matrix.arch }}"
           mkdir -p "$TARGET_DIR"
           
-          # 复制构建的 .node 文件
-          ARTIFACT_PATH="${{ steps.find_artifacts.outputs.artifact_path }}"
-          cp "$ARTIFACT_PATH" "$TARGET_DIR/"
+          # 复制构建的 .node 文件 - 检查两个可能的位置
+          if [ -f "build/Release/wsjtx_lib_nodejs.node" ]; then
+            cp build/Release/wsjtx_lib_nodejs.node "$TARGET_DIR/"
+            echo "Copied from build/Release/"
+          elif [ -f "build/wsjtx_lib_nodejs.node" ]; then
+            cp build/wsjtx_lib_nodejs.node "$TARGET_DIR/"
+            echo "Copied from build/"
+          else
+            echo "❌ Native module not found for packaging!"
+            exit 1
+          fi
           
           # 显示构建结果
           echo "构建完成的文件:"
@@ -367,8 +325,8 @@ jobs:
             "arch": "${{ matrix.arch }}",
             "node_version": "${{ env.NODE_VERSION }}",
             "build_time": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-            "artifact_path": "$ARTIFACT_PATH",
-            "file_size": $(stat -c%s "$ARTIFACT_PATH" 2>/dev/null || stat -f%z "$ARTIFACT_PATH" 2>/dev/null || echo "unknown")
+            "cmake_arch": "${{ matrix.cmake_arch }}",
+            "file_size": $(stat -c%s "$TARGET_DIR"/*.node 2>/dev/null || stat -f%z "$TARGET_DIR"/*.node 2>/dev/null || echo "unknown")
           }
           EOF
           
