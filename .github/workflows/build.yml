@@ -22,7 +22,7 @@ jobs:
           - os: ubuntu-latest
             arch: x64
             node_arch: x64
-            cmake_arch: x86_64
+            cmake_arch: x64
           
           # macOS builds
           - os: macos-latest
@@ -141,40 +141,6 @@ jobs:
             mingw-w64-x86_64-gcc-fortran
             mingw-w64-x86_64-nodejs
 
-      # 3a. 验证 MSYS2 工具链 - Windows
-      - name: Verify MSYS2 toolchain (Windows)
-        if: runner.os == 'Windows'
-        shell: msys2 {0}
-        run: |
-          echo "=== Verifying MSYS2 toolchain installation ==="
-          echo "Checking essential tools..."
-          which gcc && gcc --version || echo "❌ GCC not found"
-          which g++ && g++ --version || echo "❌ G++ not found"
-          which gfortran && gfortran --version || echo "❌ gfortran not found"
-          which cmake && cmake --version || echo "❌ CMake not found"
-          which pkg-config && pkg-config --version || echo "❌ pkg-config not found"
-          which node && node --version || echo "❌ Node.js not found"
-          which npm && npm --version || echo "❌ npm not found"
-          which npx && npx --version || echo "❌ npx not found"
-          
-          echo "Checking libraries..."
-          pkg-config --exists fftw3f && echo "✅ FFTW3f available" || echo "❌ FFTW3f not found"
-          
-          # Boost 在 MSYS2 中可能没有 pkg-config 文件，检查实际安装
-          if [ -d "/mingw64/include/boost" ]; then
-            echo "✅ Boost headers found"
-          else
-            echo "❌ Boost headers not found"
-          fi
-          
-          if ls /mingw64/lib/libboost* >/dev/null 2>&1; then
-            echo "✅ Boost libraries found"
-          else
-            echo "❌ Boost libraries not found"
-          fi
-          
-          echo "=== Toolchain verification complete ==="
-
       # 4. 安装 npm 依赖
       - name: Install npm dependencies
         run: npm ci --ignore-scripts
@@ -183,7 +149,60 @@ jobs:
       - name: Build TypeScript
         run: npm run build:ts
 
-      # 6. 构建原生模块 - Linux/macOS
+      # 6. 验证构建环境 - Windows (基于 build_mingw.sh)
+      - name: Verify build environment (Windows MSYS2)
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: |
+          echo "=== Verifying essential tools ==="
+          which cmake && cmake --version || { echo "❌ CMake not found"; exit 1; }
+          which gcc && gcc --version || { echo "❌ GCC not found"; exit 1; }
+          which g++ && g++ --version || { echo "❌ G++ not found"; exit 1; }
+          which gfortran && gfortran --version || { echo "❌ gfortran not found"; exit 1; }
+          which pkg-config && pkg-config --version || { echo "❌ pkg-config not found"; exit 1; }
+          which node && node --version || { echo "❌ Node.js not found"; exit 1; }
+          which npm && npm --version || { echo "❌ npm not found"; exit 1; }
+          which npx && npx --version || { echo "❌ npx not found"; exit 1; }
+          
+          echo -e "\n=== Checking node-addon-api headers ==="
+          if [ -d "node_modules/node-addon-api" ]; then
+              echo "✅ node-addon-api package found"
+              if [ -f "node_modules/node-addon-api/napi.h" ]; then
+                  echo "✅ napi.h found"
+              else
+                  echo "❌ napi.h not found"
+                  exit 1
+              fi
+          else
+              echo "❌ node-addon-api package not found"
+              exit 1
+          fi
+          
+          echo -e "\n=== Checking FFTW3 availability ==="
+          if pkg-config --exists fftw3f; then
+              echo "✅ FFTW3F found"
+              echo "FFTW3F libraries: $(pkg-config --libs fftw3f)"
+          else
+              echo "❌ FFTW3F not found"
+              exit 1
+          fi
+          
+          echo -e "\n=== Checking Boost installation ==="
+          if [ -d "/mingw64/include/boost" ]; then
+              echo "✅ Boost headers found"
+          else
+              echo "❌ Boost headers not found"
+              exit 1
+          fi
+          
+          if ls /mingw64/lib/libboost* >/dev/null 2>&1; then
+              echo "✅ Boost libraries found"
+          else
+              echo "❌ Boost libraries not found"
+              exit 1
+          fi
+
+      # 7. 构建原生模块 - Linux/macOS
       - name: Build native module (Linux/macOS)
         if: runner.os != 'Windows'
         run: |
@@ -203,23 +222,12 @@ jobs:
             npx cmake-js compile --arch=${{ matrix.cmake_arch }}
           fi
 
-      # 7. 构建原生模块 - Windows MSYS2/MinGW-w64
+      # 8. 构建原生模块 - Windows MSYS2/MinGW-w64 (基于 build_mingw.sh)
       - name: Build native module (Windows MSYS2)
         if: runner.os == 'Windows'
         shell: msys2 {0}
         run: |
           echo "=== Building with MSYS2/MinGW-w64 toolchain ==="
-          echo "Using improved CMakeLists.txt with MinGW-specific MSVC flag clearing"
-          
-          # 验证工具是否可用
-          echo "Verifying tools availability..."
-          which cmake && cmake --version || echo "CMake not found"
-          which gcc && gcc --version || echo "GCC not found"
-          which gfortran && gfortran --version || echo "gfortran not found"
-          which pkg-config && pkg-config --version || echo "pkg-config not found"
-          which node && node --version || echo "Node.js not found"
-          which npm && npm --version || echo "npm not found"
-          which npx && npx --version || echo "npx not found"
           
           # 设置环境变量强制使用 MinGW 工具链
           export PKG_CONFIG_PATH="/mingw64/lib/pkgconfig"
@@ -227,37 +235,73 @@ jobs:
           export CC="gcc"
           export CXX="g++"
           export FC="gfortran"
-          
-          # 强制 cmake-js 使用 MinGW 而不是 Visual Studio
-          export CMAKE_GENERATOR="MinGW Makefiles"
           export CMAKE_MAKE_PROGRAM="mingw32-make"
           
           # 禁用 Visual Studio 检测
           unset VSINSTALLDIR
           unset VCINSTALLDIR
           unset WindowsSDKDir
+          unset VCPKG_ROOT
           
-          # 验证 Boost 安装
-          echo "Checking Boost installation..."
-          find /mingw64 -name "*boost*" -type f | head -5
-          ls -la /mingw64/include/boost/ || echo "Boost headers not found"
-          ls -la /mingw64/lib/libboost* | head -3 || echo "Boost libraries not found"
+          echo -e "\n=== Environment variables ==="
+          echo "PKG_CONFIG_PATH=$PKG_CONFIG_PATH"
+          echo "CMAKE_PREFIX_PATH=$CMAKE_PREFIX_PATH"
+          echo "CC=$CC, CXX=$CXX, FC=$FC"
           
           # 清理构建目录
           rm -rf build/
           
-          echo "Starting cmake-js compilation with MinGW Makefiles..."
-          echo "CMakeLists.txt now handles MSVC flag clearing automatically"
-          
-          # 使用 cmake-js，依赖 CMakeLists.txt 中的修复
+          echo -e "\n=== Starting build process ==="
           npx cmake-js compile --arch=${{ matrix.cmake_arch }} \
             --generator="MinGW Makefiles" \
+            --no-retry \
             --verbose
 
-      # 8. 运行测试
+      # 9. 查找并验证构建产物 (兼容不同构建目录结构)
+      - name: Find and verify build artifacts
+        id: find_artifacts
+        run: |
+          echo "=== Searching for build artifacts ==="
+          
+          # 定义可能的构建产物路径
+          POSSIBLE_PATHS=(
+            "build/wsjtx_lib_nodejs.node"
+            "build/Release/wsjtx_lib_nodejs.node" 
+            "build/Debug/wsjtx_lib_nodejs.node"
+          )
+          
+          FOUND_PATH=""
+          for path in "${POSSIBLE_PATHS[@]}"; do
+            if [ -f "$path" ]; then
+              echo "✅ Found native module at: $path"
+              FOUND_PATH="$path"
+              break
+            else
+              echo "❌ Not found: $path"
+            fi
+          done
+          
+          if [ -z "$FOUND_PATH" ]; then
+            echo "❌ Native module not found in any expected location!"
+            echo "Build directory contents:"
+            find build -type f -name "*.node" || echo "No .node files found"
+            find build -type f || echo "No files found in build directory"
+            exit 1
+          fi
+          
+          # 验证文件
+          ls -la "$FOUND_PATH"
+          file "$FOUND_PATH" || echo "file command not available"
+          
+          # 设置输出变量
+          echo "artifact_path=$FOUND_PATH" >> $GITHUB_OUTPUT
+          echo "artifact_dir=$(dirname $FOUND_PATH)" >> $GITHUB_OUTPUT
+          echo "artifact_name=$(basename $FOUND_PATH)" >> $GITHUB_OUTPUT
+        shell: bash
+
+      # 10. 运行测试
       - name: Run tests
         run: |
-          # 显示编译后的文件结构
           echo "📁 Checking compiled files structure:"
           ls -la dist/ || echo "dist directory not found"
           find dist -name "*.js" -type f || echo "No JS files found in dist"
@@ -266,36 +310,56 @@ jobs:
           if [ -f "dist/test/wsjtx.basic.test.js" ]; then
             echo "✅ Basic test file found: dist/test/wsjtx.basic.test.js"
             
-            # 检查原生模块是否存在
-            if [ -f "build/Release/wsjtx_lib_nodejs.node" ]; then
-              echo "✅ Native module found: build/Release/wsjtx_lib_nodejs.node"
+            # 检查原生模块是否存在 (使用步骤9找到的路径)
+            ARTIFACT_PATH="${{ steps.find_artifacts.outputs.artifact_path }}"
+            if [ -f "$ARTIFACT_PATH" ]; then
+              echo "✅ Native module found: $ARTIFACT_PATH"
               # 运行基础测试
               npm test
             else
-              echo "❌ Native module not found! Cannot run tests."
+              echo "❌ Native module not found at: $ARTIFACT_PATH"
               exit 1
             fi
           else
             echo "❌ Basic test file not found!"
+            echo "Available test files:"
+            find dist -name "*.test.js" -type f || echo "No test files found"
             exit 1
           fi
         shell: bash
 
-      # 9. 创建预构建二进制文件
+      # 11. 创建预构建二进制文件
       - name: Create prebuilt binaries
         run: |
           # 创建目标目录
-          mkdir -p prebuilds/${{ matrix.os }}-${{ matrix.arch }}
+          TARGET_DIR="prebuilds/${{ matrix.os }}-${{ matrix.arch }}"
+          mkdir -p "$TARGET_DIR"
           
           # 复制构建的 .node 文件
-          cp build/Release/*.node prebuilds/${{ matrix.os }}-${{ matrix.arch }}/
+          ARTIFACT_PATH="${{ steps.find_artifacts.outputs.artifact_path }}"
+          cp "$ARTIFACT_PATH" "$TARGET_DIR/"
           
           # 显示构建结果
           echo "构建完成的文件:"
-          ls -la prebuilds/${{ matrix.os }}-${{ matrix.arch }}/
+          ls -la "$TARGET_DIR"
+          
+          # 创建构建信息文件
+          cat > "$TARGET_DIR/build-info.json" << EOF
+          {
+            "platform": "${{ matrix.os }}",
+            "arch": "${{ matrix.arch }}",
+            "node_version": "${{ env.NODE_VERSION }}",
+            "build_time": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "artifact_path": "$ARTIFACT_PATH",
+            "file_size": $(stat -c%s "$ARTIFACT_PATH" 2>/dev/null || stat -f%z "$ARTIFACT_PATH" 2>/dev/null || echo "unknown")
+          }
+          EOF
+          
+          echo "构建信息:"
+          cat "$TARGET_DIR/build-info.json"
         shell: bash
 
-      # 10. 上传构建产物到 artifacts
+      # 12. 上传构建产物到 artifacts
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -304,13 +368,16 @@ jobs:
           retention-days: 30
           if-no-files-found: error
 
-      # 11. 上传完整构建目录（用于调试）
+      # 13. 上传完整构建目录（用于调试）
       - name: Upload build directory for debugging
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: build-debug-${{ matrix.os }}-${{ matrix.arch }}
-          path: build/
+          path: |
+            build/
+            CMakeCache.txt
+            cmake_install.cmake
           retention-days: 7
 
   # 汇总所有构建产物
@@ -342,13 +409,27 @@ jobs:
           echo "所有平台的构建产物:"
           find final-prebuilds -name "*.node" -exec ls -la {} \;
           
-          # 创建构建摘要
+          # 汇总构建信息
           echo "# 构建摘要" > build-summary.md
-          echo "构建时间: $(date)" >> build-summary.md
+          echo "构建时间: $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> build-summary.md
+          echo "" >> build-summary.md
           echo "## 支持的平台:" >> build-summary.md
+          
+          for info_file in final-prebuilds/*/build-info.json; do
+            if [ -f "$info_file" ]; then
+              platform=$(jq -r '.platform' "$info_file")
+              arch=$(jq -r '.arch' "$info_file")
+              file_size=$(jq -r '.file_size' "$info_file")
+              echo "- $platform-$arch ($(numfmt --to=iec $file_size 2>/dev/null || echo $file_size))" >> build-summary.md
+            fi
+          done
+          
+          echo "" >> build-summary.md
+          echo "## 文件详情:" >> build-summary.md
           find final-prebuilds -name "*.node" | while read file; do
-            platform=$(echo "$file" | cut -d'/' -f2)
-            echo "- $platform" >> build-summary.md
+            size=$(stat -c%s "$file" 2>/dev/null || stat -f%z "$file" 2>/dev/null || echo "unknown")
+            size_human=$(numfmt --to=iec $size 2>/dev/null || echo "$size bytes")
+            echo "- \`$(basename "$file")\`: $size_human" >> build-summary.md
           done
 
       - name: Upload combined artifacts

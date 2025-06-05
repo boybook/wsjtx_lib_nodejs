@@ -42,6 +42,7 @@ import {
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+import fs from 'node:fs';
 
 // Create require function for ES modules
 const require = createRequire(import.meta.url);
@@ -51,9 +52,37 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // Determine the correct path to the native module
-// When running from src/, the path is '../build/Release/wsjtx_lib_nodejs.node'
-// When running from dist/src/, the path is '../../build/Release/wsjtx_lib_nodejs.node'
-const nativeModulePath = path.resolve(__dirname, '..', '..', 'build', 'Release', 'wsjtx_lib_nodejs.node');
+// Different build systems may place the module in different locations:
+// - MinGW/MSYS2: '../build/wsjtx_lib_nodejs.node'
+// - MSVC/other: '../build/Release/wsjtx_lib_nodejs.node'
+// - From dist/src/: '../../build/wsjtx_lib_nodejs.node' or '../../build/Release/wsjtx_lib_nodejs.node'
+function findNativeModule(): string {
+  const possiblePaths = [
+    // Direct build output (MinGW/MSYS2, etc.)
+    path.resolve(__dirname, '..', 'build', 'wsjtx_lib_nodejs.node'),
+    // Release subdirectory (MSVC, cmake default, etc.)
+    path.resolve(__dirname, '..', 'build', 'Release', 'wsjtx_lib_nodejs.node'),
+    // From dist/src/ - direct build output
+    path.resolve(__dirname, '..', '..', 'build', 'wsjtx_lib_nodejs.node'),
+    // From dist/src/ - Release subdirectory
+    path.resolve(__dirname, '..', '..', 'build', 'Release', 'wsjtx_lib_nodejs.node'),
+  ];
+
+  for (const modulePath of possiblePaths) {
+    if (fs.existsSync(modulePath)) {
+      return modulePath;
+    }
+  }
+
+  // If no module found, throw a helpful error with all attempted paths
+  const pathList = possiblePaths.map(p => `  - ${p}`).join('\n');
+  throw new Error(
+    `Native module not found. Searched in:\n${pathList}\n\n` +
+    'Please run "npm run build" to compile the native module.'
+  );
+}
+
+const nativeModulePath = findNativeModule();
 
 // Import the native module (will be built by cmake-js)
 // @ts-ignore - Native module types are defined separately

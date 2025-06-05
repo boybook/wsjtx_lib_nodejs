@@ -1,14 +1,8 @@
 cmake_minimum_required(VERSION 3.15)
-
-# 禁用 vcpkg Manifest 模式，使用经典模式
-if(DEFINED CMAKE_TOOLCHAIN_FILE AND CMAKE_TOOLCHAIN_FILE MATCHES "vcpkg")
-    set(VCPKG_MANIFEST_MODE OFF CACHE BOOL "Disable vcpkg manifest mode" FORCE)
-    set(VCPKG_MANIFEST_INSTALL OFF CACHE BOOL "Disable vcpkg manifest install" FORCE)
-    message(STATUS "Detected vcpkg toolchain, disabling manifest mode")
-endif()
-
-
 project(wsjtx_lib_nodejs LANGUAGES C CXX Fortran)
+
+# 包含 cmake-js 提供的 CMake 模块 - 这必须在最前面
+# 注意：cmake-js 7.x 不再使用 CMAKE_JS_DIR，改为直接使用变量
 
 # Set C++ standard
 set(CMAKE_CXX_STANDARD 17)
@@ -17,18 +11,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # Enable position independent code for all targets (including subprojects)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
-# Include cmake-js - this must come first to get CMAKE_JS_* variables
-if(CMAKE_JS_INC)
-    include_directories(${CMAKE_JS_INC})
-endif()
-
-# Add Node.js include path for node_api.h
-execute_process(
-    COMMAND node -p "require('path').dirname(process.execPath) + '/../include/node'"
-    OUTPUT_VARIABLE NODE_INCLUDE_DIR
-    OUTPUT_STRIP_TRAILING_WHITESPACE
-)
-include_directories(${NODE_INCLUDE_DIR})
+# 注意：Node.js 头文件路径将在创建目标后单独为 C++ 目标设置
 
 # **关键修复**: Windows + MinGW 环境检测并清除 MSVC 特定标志
 if(WIN32 AND CMAKE_CXX_COMPILER_ID MATCHES "GNU")
@@ -159,50 +142,48 @@ elseif(APPLE)
         PATHS /opt/homebrew/lib /usr/local/lib
         NO_DEFAULT_PATH
     )
+elseif(WIN32 AND CMAKE_CXX_COMPILER_ID MATCHES "GNU")
+    # Windows with MSYS2/MinGW: use pkg-config if available, otherwise force enable
+    execute_process(
+        COMMAND pkg-config --exists fftw3f
+        RESULT_VARIABLE PKG_CONFIG_FFTW_RESULT
+        OUTPUT_QUIET ERROR_QUIET
+    )
+    
+    if(PKG_CONFIG_FFTW_RESULT EQUAL 0)
+        # FFTW3 found via pkg-config, assume threads support exists
+        message(STATUS "FFTW3 found via pkg-config, enabling threads support")
+        set(FFTW3F_THREADS_LIB "fftw3f_threads")
+        set(FFTW_THREADS_LIBRARIES "fftw3f_threads")
+        set(FFTW_HAS_THREADS TRUE)
+    else()
+        message(STATUS "FFTW3 threads support detection failed, disabling")
+        set(FFTW_THREADS_LIBRARIES "")
+        set(FFTW_HAS_THREADS FALSE)
+    endif()
 else()
-    # Windows with MSYS2: search in mingw64 locations
+    # Other Windows: search in mingw64 locations
     find_library(FFTW3F_THREADS_LIB 
         NAMES fftw3f_threads libfftw3f_threads
-        PATHS /mingw64/lib
+        PATHS /mingw64/lib D:/msys64/mingw64/lib
         NO_DEFAULT_PATH
     )
-endif()
-
-if(FFTW3F_THREADS_LIB)
-    message(STATUS "FFTW3 with threads support found: ${FFTW3F_THREADS_LIB}")
-    set(FFTW_THREADS_LIBRARIES fftw3f_threads)
-    set(FFTW_HAS_THREADS TRUE)
-else()
-    message(STATUS "FFTW3 threads not found, using single-threaded version")
-    set(FFTW_THREADS_LIBRARIES "")
-    set(FFTW_HAS_THREADS FALSE)
-endif()
-
-# Auto-detect node-addon-api path (monorepo vs standalone)
-set(NODE_ADDON_API_PATHS
-    "${CMAKE_SOURCE_DIR}/node_modules/node-addon-api"           # Standalone project
-    "${CMAKE_SOURCE_DIR}/../../node_modules/node-addon-api"    # Monorepo (2 levels up)
-    "${CMAKE_SOURCE_DIR}/../../../node_modules/node-addon-api" # Monorepo (3 levels up)
-)
-
-set(NODE_ADDON_API_PATH "")
-foreach(path ${NODE_ADDON_API_PATHS})
-    if(EXISTS "${path}/napi.h")
-        set(NODE_ADDON_API_PATH "${path}")
-        message(STATUS "Found node-addon-api at: ${NODE_ADDON_API_PATH}")
-        break()
+    
+    if(FFTW3F_THREADS_LIB)
+        message(STATUS "FFTW3 with threads support found: ${FFTW3F_THREADS_LIB}")
+        set(FFTW_THREADS_LIBRARIES fftw3f_threads)
+        set(FFTW_HAS_THREADS TRUE)
+    else()
+        message(STATUS "FFTW3 threads not found, using single-threaded version")
+        set(FFTW_THREADS_LIBRARIES "")
+        set(FFTW_HAS_THREADS FALSE)
     endif()
-endforeach()
-
-if(NOT NODE_ADDON_API_PATH)
-    message(FATAL_ERROR "Could not find node-addon-api. Searched paths: ${NODE_ADDON_API_PATHS}")
 endif()
 
 # Include directories
 include_directories(
     ${CMAKE_SOURCE_DIR}/wsjtx_lib
     ${CMAKE_SOURCE_DIR}/native
-    ${NODE_ADDON_API_PATH}
     ${FFTW3F_INCLUDE_DIRS}
     ${Boost_INCLUDE_DIRS}
 )
@@ -309,27 +290,8 @@ link_directories(${FFTW3F_LIBRARY_DIRS})
 # Source files for the Node.js addon
 file(GLOB_RECURSE NATIVE_SOURCES "native/*.cpp" "native/*.h")
 
-# Create the Node.js addon with MinGW-specific handling
-if(WIN32 AND CMAKE_CXX_COMPILER_ID MATCHES "GNU")
-    # MinGW build: exclude Windows delay load hook
-    add_library(${PROJECT_NAME} SHARED 
-        ${NATIVE_SOURCES}
-    )
-    message(STATUS "MinGW build: excluding CMAKE_JS_SRC (Windows delay load hook)")
-else()
-    # Other platforms: include CMAKE_JS_SRC if available
-    if(CMAKE_JS_SRC)
-        add_library(${PROJECT_NAME} SHARED 
-            ${NATIVE_SOURCES}
-            ${CMAKE_JS_SRC}
-        )
-        message(STATUS "Non-MinGW build: including CMAKE_JS_SRC for delay-load hook")
-    else()
-        add_library(${PROJECT_NAME} SHARED 
-            ${NATIVE_SOURCES}
-        )
-    endif()
-endif()
+# 定义输出库（会生成 wsjtx_lib_nodejs.node）
+add_library(${PROJECT_NAME} SHARED ${NATIVE_SOURCES})
 
 # Set properties for Node.js addon
 set_target_properties(${PROJECT_NAME} PROPERTIES 
@@ -339,29 +301,54 @@ set_target_properties(${PROJECT_NAME} PROPERTIES
     POSITION_INDEPENDENT_CODE ON
 )
 
-# Set Node.js addon include directories
-if(CMAKE_JS_INC)
+# 设置 Node.js 和 node-addon-api 头文件路径（仅针对 C++ 目标）
+if(WIN32 AND CMAKE_CXX_COMPILER_ID MATCHES "GNU")
+    # Windows MinGW: 使用 MSYS2 的 Node.js 头文件 + 项目的 node-addon-api
+    target_include_directories(${PROJECT_NAME} PRIVATE 
+        "${CMAKE_JS_INC}"
+        "/mingw64/include/node"
+        "/mingw64/include/node/node"
+        "/mingw64/include"
+        "${CMAKE_SOURCE_DIR}/node_modules/node-addon-api"
+        "${CMAKE_SOURCE_DIR}/node_modules/node-addon-api/include"
+    )
+    message(STATUS "MinGW build: using MSYS2 Node.js headers and local node-addon-api")
+    message(STATUS "CMAKE_JS_INC: ${CMAKE_JS_INC}")
+else()
+    # 其他平台：使用 cmake-js 提供的头文件路径
     target_include_directories(${PROJECT_NAME} PRIVATE ${CMAKE_JS_INC})
+    message(STATUS "Using cmake-js provided headers: ${CMAKE_JS_INC}")
 endif()
 
 # Compiler-specific options
 target_compile_definitions(${PROJECT_NAME} PRIVATE 
     NAPI_DISABLE_CPP_EXCEPTIONS
     BUILDING_NODE_EXTENSION
+    NAPI_VERSION=4
+    NODE_GYP_MODULE_NAME=${PROJECT_NAME}
 )
 
 # Add compile flags
 target_compile_options(${PROJECT_NAME} PRIVATE ${FFTW3F_CFLAGS_OTHER})
 
-# Link libraries with MinGW-specific handling
+# 链接 Node.js 运行时库
 if(WIN32 AND CMAKE_CXX_COMPILER_ID MATCHES "GNU")
-    # MinGW: don't link CMAKE_JS_LIB as it may cause issues
-    message(STATUS "MinGW build: skipping CMAKE_JS_LIB linking")
-else()
-    # Other platforms: link CMAKE_JS_LIB if available
-    if(CMAKE_JS_LIB)
-        target_link_libraries(${PROJECT_NAME} PRIVATE ${CMAKE_JS_LIB})
+    # Windows MinGW: 复制库文件到本地目录避免路径问题
+    set(LOCAL_NODE_LIB "${CMAKE_BINARY_DIR}/node.lib")
+    
+    # 检查并复制 Node.js 库文件
+    if(EXISTS "${CMAKE_JS_LIB}")
+        message(STATUS "Copying Node.js library from: ${CMAKE_JS_LIB}")
+        configure_file("${CMAKE_JS_LIB}" "${LOCAL_NODE_LIB}" COPYONLY)
+        target_link_libraries(${PROJECT_NAME} PRIVATE "${LOCAL_NODE_LIB}")
+        message(STATUS "MinGW build: Using copied Node.js library: ${LOCAL_NODE_LIB}")
+    else()
+        message(FATAL_ERROR "Node.js library not found at: ${CMAKE_JS_LIB}")
     endif()
+else()
+    # 其他平台：使用 cmake-js 提供的库
+    target_link_libraries(${PROJECT_NAME} PRIVATE ${CMAKE_JS_LIB})
+    message(STATUS "Using cmake-js provided library: ${CMAKE_JS_LIB}")
 endif()
 
 target_link_libraries(${PROJECT_NAME} PRIVATE
