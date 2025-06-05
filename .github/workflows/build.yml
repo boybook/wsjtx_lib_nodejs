@@ -325,26 +325,50 @@ jobs:
               Write-Host "🔍 Checking module dependencies..." -ForegroundColor Cyan
               
               # 在MSYS2环境中检查依赖
-              C:\msys64\usr\bin\bash.exe -c "ldd '$directModule' 2>/dev/null || objdump -p '$directModule' | grep 'DLL Name' || echo 'Failed to check dependencies'"
+              $dependencies = C:\msys64\usr\bin\bash.exe -c "objdump -p '$directModule' | grep 'DLL Name' | awk '{print `$3}'"
+              Write-Host "Required DLLs:" -ForegroundColor Yellow
+              $dependencies | ForEach-Object { Write-Host "  - $_" -ForegroundColor Gray }
               
-              # 检查关键DLL是否存在
-              Write-Host "🔍 Checking critical DLLs..." -ForegroundColor Cyan
+              # 查找并复制必要的DLL
+              Write-Host "🔍 Locating and copying required DLLs..." -ForegroundColor Cyan
               $msys2Bin = "C:\msys64\mingw64\bin"
-              $criticalDlls = @("libfftw3f-3.dll", "libgfortran-5.dll", "libgcc_s_seh-1.dll")
+              $buildDir = "build"
               
-              foreach ($dll in $criticalDlls) {
-                $dllPath = Join-Path $msys2Bin $dll
-                if (Test-Path $dllPath) {
-                  Write-Host "  ✅ Found: $dll" -ForegroundColor Green
+              # 需要复制的DLL列表（排除系统DLL）
+              $requiredDlls = @(
+                "libfftw3f-3.dll",
+                "libfftw3f_threads-3.dll", 
+                "libgcc_s_seh-1.dll",
+                "libgfortran-5.dll",
+                "libwinpthread-1.dll",
+                "libstdc++-6.dll"
+              )
+              
+              $foundDlls = 0
+              foreach ($dll in $requiredDlls) {
+                $sourcePath = Join-Path $msys2Bin $dll
+                $targetPath = Join-Path $buildDir $dll
+                
+                if (Test-Path $sourcePath) {
+                  Copy-Item $sourcePath $targetPath -Force
+                  Write-Host "  ✅ Copied: $dll" -ForegroundColor Green
+                  $foundDlls++
                 } else {
                   Write-Host "  ❌ Missing: $dll" -ForegroundColor Red
                 }
               }
               
-              # 临时添加MSYS2 bin到PATH，确保运行时能找到DLL
+              Write-Host "📊 Found and copied $foundDlls/$($requiredDlls.Count) required DLLs" -ForegroundColor Cyan
+              
+              # 显示build目录内容
+              Write-Host "📁 Build directory contents:" -ForegroundColor Cyan
+              Get-ChildItem -Path $buildDir | Select-Object Name, Length
+              
+              # 添加build目录到PATH（这样Node.js可以找到DLL）
               $originalPath = $env:PATH
-              $env:PATH = "$msys2Bin;$env:PATH"
-              Write-Host "🔧 Added MSYS2 bin to PATH for testing" -ForegroundColor Yellow
+              $buildDirFullPath = (Resolve-Path $buildDir).Path
+              $env:PATH = "$buildDirFullPath;$msys2Bin;$env:PATH"
+              Write-Host "🔧 Added build directory and MSYS2 bin to PATH" -ForegroundColor Yellow
               
               try {
                 # 运行基础测试
