@@ -348,21 +348,41 @@ jobs:
               echo "Updated PATH (first few entries):"
               echo $PATH | tr ':' '\n' | head -3
               
-              # 验证Node.js和npm在MinGW环境中可用
+              # 验证Node.js版本兼容性
               echo ""
               echo "🔍 Verifying Node.js environment:"
+              echo "MinGW Node.js version:"
               which node && node --version || echo "Node.js not found in MinGW PATH"
-              which npm && npm --version || echo "npm not found in MinGW PATH"
+              
+              # 强制使用GitHub Actions安装的Node.js版本（与构建时一致）
+              echo ""
+              echo "🔧 Ensuring Node.js version consistency..."
+              echo "Expected Node.js version: ${{ env.NODE_VERSION }}"
+              
+              # 查找GitHub Actions安装的Node.js路径
+              GITHUB_NODE_PATH=""
+              if [ -f "/c/hostedtoolcache/node/${{ env.NODE_VERSION }}"*/x64/node.exe ]; then
+                GITHUB_NODE_PATH=$(dirname $(find /c/hostedtoolcache/node -name "node.exe" | grep "${{ env.NODE_VERSION }}" | head -1))
+                echo "Found GitHub Actions Node.js at: $GITHUB_NODE_PATH"
+              elif [ -f "/c/Program Files/nodejs/node.exe" ]; then
+                GITHUB_NODE_PATH="/c/Program Files/nodejs"
+                echo "Using system Node.js at: $GITHUB_NODE_PATH"
+              fi
+              
+              # 设置PATH，确保使用正确的Node.js版本，但保持MinGW库路径
+              if [ -n "$GITHUB_NODE_PATH" ]; then
+                export PATH="$GITHUB_NODE_PATH:/mingw64/bin:$PATH"
+                echo "Updated PATH to use GitHub Actions Node.js"
+                echo "Active Node.js version: $(node --version)"
+                echo "Active npm version: $(npm --version)"
+              else
+                echo "⚠️ Warning: Could not find GitHub Actions Node.js, using MinGW Node.js"
+                echo "This may cause version mismatch issues"
+              fi
               
               # 运行测试
               echo ""
-              echo "🧪 Running tests in MinGW environment..."
-              
-              # 如果MinGW环境中的Node.js不可用，使用系统Node.js但确保DLL路径正确
-              if ! command -v node >/dev/null 2>&1; then
-                echo "Using system Node.js with MinGW library paths..."
-                export PATH="/c/Program Files/nodejs:$PATH"
-              fi
+              echo "🧪 Running tests with version-matched Node.js..."
               
               # 运行测试
               npm test
