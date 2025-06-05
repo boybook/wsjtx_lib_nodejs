@@ -229,6 +229,17 @@ jobs:
         run: |
           echo "=== Building with MSYS2/MinGW-w64 toolchain ==="
           
+          # 调试：检查关键DLL的存在
+          echo "🔍 Pre-build DLL availability check:"
+          for dll in libfftw3f-3.dll libfftw3f_threads-3.dll libgfortran-5.dll libgcc_s_seh-1.dll libwinpthread-1.dll libstdc++-6.dll; do
+            if [ -f "/mingw64/bin/$dll" ]; then
+              echo "  ✅ $dll: $(stat -c%s /mingw64/bin/$dll) bytes"
+            else
+              echo "  ❌ $dll: NOT FOUND"
+            fi
+          done
+          echo ""
+          
           # 设置环境变量强制使用 MinGW 工具链
           export PKG_CONFIG_PATH="/mingw64/lib/pkgconfig"
           export CMAKE_PREFIX_PATH="/mingw64"
@@ -494,6 +505,13 @@ jobs:
         if: runner.os == 'Windows'
         shell: msys2 {0}
         run: |
+          echo "🔧 Windows prebuilt packaging started"
+          echo "Environment info:"
+          echo "  • Shell: $0"
+          echo "  • PWD: $(pwd)"
+          echo "  • User: $(whoami)"
+          echo ""
+          
           # 创建目标目录
           TARGET_DIR="prebuilds/${{ matrix.os }}-${{ matrix.arch }}"
           echo "📁 Creating target directory: $TARGET_DIR"
@@ -528,16 +546,49 @@ jobs:
           echo ""
           echo "📋 Copying DLLs from MinGW..."
           bundled_count=0
+          missing_dlls=""
           
+          # 首先检查MinGW目录是否存在
+          echo "🔍 Checking MinGW directory..."
+          if [ -d "/mingw64/bin" ]; then
+            echo "  ✅ /mingw64/bin exists"
+            echo "  Available DLLs in /mingw64/bin:"
+            ls /mingw64/bin/lib*.dll | head -10 || echo "  No lib*.dll files found"
+          else
+            echo "  ❌ /mingw64/bin not found!"
+            exit 1
+          fi
+          
+          echo ""
+          echo "📋 Processing each required DLL..."
           for dll in $REQUIRED_DLLS; do
+            echo "  🔍 Checking: $dll"
             if [ -f "/mingw64/bin/$dll" ]; then
-              cp "/mingw64/bin/$dll" "$TARGET_DIR/"
-              echo "  ✅ Bundled: $dll"
-              ((bundled_count++))
+              if cp "/mingw64/bin/$dll" "$TARGET_DIR/" 2>/dev/null; then
+                echo "    ✅ Bundled: $dll"
+                bundled_count=$((bundled_count + 1))
+              else
+                echo "    ❌ Copy failed: $dll"
+                missing_dlls="$missing_dlls $dll"
+              fi
             else
-              echo "  ❌ Missing: $dll"
+              echo "    ❌ Missing: $dll"
+              missing_dlls="$missing_dlls $dll"
+              
+              # 尝试查找类似名称的文件
+              echo "    🔍 Looking for similar files..."
+              find /mingw64/bin -name "*${dll%%-*}*" -type f | head -3 || echo "    No similar files found"
             fi
           done
+          
+          # 报告结果
+          echo ""
+          echo "📊 DLL bundling summary:"
+          echo "  • Successfully bundled: $bundled_count DLLs"
+          if [ -n "$missing_dlls" ]; then
+            echo "  • Missing DLLs:$missing_dlls"
+            echo "  ⚠️  Some DLLs are missing, but continuing..."
+          fi
           
           # 显示最终结果
           echo ""
@@ -549,6 +600,19 @@ jobs:
           total_size=$(du -sb "$TARGET_DIR" | cut -f1)
           
           # 创建构建信息文件
+          # 获取实际捆绑的DLL列表
+          bundled_dll_list=""
+          for dll_file in "$TARGET_DIR"/*.dll; do
+            if [ -f "$dll_file" ]; then
+              dll_name=$(basename "$dll_file")
+              if [ -z "$bundled_dll_list" ]; then
+                bundled_dll_list="\"$dll_name\""
+              else
+                bundled_dll_list="$bundled_dll_list, \"$dll_name\""
+              fi
+            fi
+          done
+          
           cat > "$TARGET_DIR/build-info.json" << EOF
           {
             "platform": "${{ matrix.os }}",
@@ -559,7 +623,9 @@ jobs:
             "file_size": $node_size,
             "bundled_libraries": $bundled_count,
             "total_package_size": $total_size,
-            "bundled_dlls": [$(echo "$REQUIRED_DLLS" | sed 's/^/"/;s/$/"/' | paste -sd, -)]
+            "required_dlls": [$(echo "$REQUIRED_DLLS" | sed 's/^/"/;s/$/"/' | paste -sd, -)],
+            "bundled_dlls": [$bundled_dll_list],
+            "missing_dlls": "$(echo $missing_dlls | sed 's/^ *//' | sed 's/ *$//')"
           }
           EOF
           
