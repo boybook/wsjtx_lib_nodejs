@@ -59,30 +59,31 @@ function findNativeModule(): string {
   const platform = process.platform;
   const arch = process.arch;
   
+  // 获取当前模块的根目录（node_modules/wsjtx-lib）
+  const moduleRoot = path.resolve(__dirname, '..', '..');
+  
   const possiblePaths = [
     // 1. Prebuilt binaries (npm packages) - highest priority
-    path.resolve(__dirname, '..', 'prebuilds', `${platform}-${arch}`, 'wsjtx_lib_nodejs.node'),
+    path.join(moduleRoot, 'prebuilds', `${platform}-${arch}`, 'wsjtx_lib_nodejs.node'),
     
     // 2. GitHub Actions legacy format (for backward compatibility)
-    path.resolve(__dirname, '..', 'prebuilds', `${platform}-latest-${arch}`, 'wsjtx_lib_nodejs.node'),
-    path.resolve(__dirname, '..', 'prebuilds', `ubuntu-latest-${arch}`, 'wsjtx_lib_nodejs.node'), // Linux
-    path.resolve(__dirname, '..', 'prebuilds', `macos-latest-${arch}`, 'wsjtx_lib_nodejs.node'),  // macOS  
-    path.resolve(__dirname, '..', 'prebuilds', `windows-latest-${arch}`, 'wsjtx_lib_nodejs.node'), // Windows
+    path.join(moduleRoot, 'prebuilds', `${platform}-latest-${arch}`, 'wsjtx_lib_nodejs.node'),
+    path.join(moduleRoot, 'prebuilds', `ubuntu-latest-${arch}`, 'wsjtx_lib_nodejs.node'), // Linux
+    path.join(moduleRoot, 'prebuilds', `macos-latest-${arch}`, 'wsjtx_lib_nodejs.node'),  // macOS  
+    path.join(moduleRoot, 'prebuilds', `windows-latest-${arch}`, 'wsjtx_lib_nodejs.node'), // Windows
     
     // 3. Local development builds - third priority
-    // From dist/src/ - direct build output
-    path.resolve(__dirname, '..', '..', 'build', 'wsjtx_lib_nodejs.node'),
-    // From dist/src/ - Release subdirectory
-    path.resolve(__dirname, '..', '..', 'build', 'Release', 'wsjtx_lib_nodejs.node'),
-    
-    // 4. Direct build output (when running from src/)
-    path.resolve(__dirname, '..', 'build', 'wsjtx_lib_nodejs.node'),
-    // Release subdirectory (MSVC, cmake default, etc.)
-    path.resolve(__dirname, '..', 'build', 'Release', 'wsjtx_lib_nodejs.node'),
+    path.join(moduleRoot, 'build', 'wsjtx_lib_nodejs.node'),
+    path.join(moduleRoot, 'build', 'Release', 'wsjtx_lib_nodejs.node'),
   ];
+
+  // 添加调试信息
+  console.log('Searching for native module with paths:');
+  possiblePaths.forEach(p => console.log(`  - ${p}`));
 
   for (const modulePath of possiblePaths) {
     if (fs.existsSync(modulePath)) {
+      console.log(`Found native module at: ${modulePath}`);
       return modulePath;
     }
   }
