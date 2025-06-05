@@ -313,31 +313,63 @@ jobs:
           if (Test-Path $testFile) {
             Write-Host "✅ Basic test file found: $testFile" -ForegroundColor Green
             
-            # 检查原生模块是否存在 - Windows特殊路径处理
-            $releaseModule = "build/Release/wsjtx_lib_nodejs.node"
+            # 检查原生模块是否存在
             $directModule = "build/wsjtx_lib_nodejs.node"
+            $releaseModule = "build/Release/wsjtx_lib_nodejs.node"
             
-            if (Test-Path $releaseModule) {
-              Write-Host "✅ Native module found: $releaseModule" -ForegroundColor Green
-              Get-Item $releaseModule | Select-Object Name, Length, LastWriteTime
-              
-              # 运行基础测试
-              Write-Host "Running npm test..." -ForegroundColor Cyan
-              npm test
-              if ($LASTEXITCODE -ne 0) {
-                Write-Host "❌ Test failed with exit code: $LASTEXITCODE" -ForegroundColor Red
-                exit $LASTEXITCODE
-              }
-            } elseif (Test-Path $directModule) {
+            if (Test-Path $directModule) {
               Write-Host "✅ Native module found: $directModule" -ForegroundColor Green
               Get-Item $directModule | Select-Object Name, Length, LastWriteTime
               
-              # 确保在正确位置
-              if (!(Test-Path "build/Release")) {
-                New-Item -ItemType Directory -Path "build/Release" -Force
+              # 检查依赖库 - 使用MSYS2环境检查
+              Write-Host "🔍 Checking module dependencies..." -ForegroundColor Cyan
+              
+              # 在MSYS2环境中检查依赖
+              C:\msys64\usr\bin\bash.exe -c "ldd '$directModule' 2>/dev/null || objdump -p '$directModule' | grep 'DLL Name' || echo 'Failed to check dependencies'"
+              
+              # 检查关键DLL是否存在
+              Write-Host "🔍 Checking critical DLLs..." -ForegroundColor Cyan
+              $msys2Bin = "C:\msys64\mingw64\bin"
+              $criticalDlls = @("libfftw3f-3.dll", "libgfortran-5.dll", "libgcc_s_seh-1.dll")
+              
+              foreach ($dll in $criticalDlls) {
+                $dllPath = Join-Path $msys2Bin $dll
+                if (Test-Path $dllPath) {
+                  Write-Host "  ✅ Found: $dll" -ForegroundColor Green
+                } else {
+                  Write-Host "  ❌ Missing: $dll" -ForegroundColor Red
+                }
               }
-              Copy-Item $directModule "build/Release/wsjtx_lib_nodejs.node" -Force
-              Write-Host "Copied native module to build/Release/" -ForegroundColor Yellow
+              
+              # 临时添加MSYS2 bin到PATH，确保运行时能找到DLL
+              $originalPath = $env:PATH
+              $env:PATH = "$msys2Bin;$env:PATH"
+              Write-Host "🔧 Added MSYS2 bin to PATH for testing" -ForegroundColor Yellow
+              
+              try {
+                # 运行基础测试
+                Write-Host "🧪 Running npm test..." -ForegroundColor Cyan
+                npm test
+                
+                if ($LASTEXITCODE -eq 0) {
+                  Write-Host "✅ Tests passed!" -ForegroundColor Green
+                } else {
+                  Write-Host "❌ Test failed with exit code: $LASTEXITCODE" -ForegroundColor Red
+                  
+                  # 尝试直接加载模块看看具体错误
+                  Write-Host "🔍 Trying to load module directly..." -ForegroundColor Cyan
+                  node -e "try { require('./build/wsjtx_lib_nodejs.node'); console.log('Module loaded successfully'); } catch(e) { console.error('Load error:', e.message); }"
+                  
+                  exit $LASTEXITCODE
+                }
+              } finally {
+                # 恢复原PATH
+                $env:PATH = $originalPath
+              }
+              
+            } elseif (Test-Path $releaseModule) {
+              Write-Host "✅ Native module found: $releaseModule" -ForegroundColor Green
+              Get-Item $releaseModule | Select-Object Name, Length, LastWriteTime
               
               # 运行基础测试
               Write-Host "Running npm test..." -ForegroundColor Cyan
