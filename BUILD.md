@@ -40,9 +40,12 @@ pacman -S --needed \
   mingw-w64-x86_64-pkg-config \
   mingw-w64-x86_64-fftw \
   mingw-w64-x86_64-boost \
-  mingw-w64-x86_64-gcc-fortran \
-  mingw-w64-x86_64-nodejs
+  mingw-w64-x86_64-gcc-fortran
 ```
+
+**注意**：在 GitHub Actions 中，我们使用系统安装的 Node.js 配合 MSYS2 的编译工具链。如果在本地开发，你可以选择：
+1. 在 MSYS2 中安装 Node.js：`pacman -S mingw-w64-x86_64-nodejs`
+2. 或者使用系统 Node.js 配合 MSYS2 编译工具
 
 ## 构建步骤
 
@@ -98,6 +101,7 @@ npm run test:full
 1. **CMake 检测到 MSVC 而不是 MinGW**
    - 确保在 MSYS2 MINGW64 终端中运行构建命令
    - 检查环境变量 PATH 中没有 Visual Studio 的路径干扰
+   - 使用 `cmake-js compile -- -G "MinGW Makefiles"` 显式指定生成器
 
 2. **找不到 gfortran**
    - 确保安装了 `mingw-w64-x86_64-gcc-fortran`
@@ -106,6 +110,14 @@ npm run test:full
 3. **Node.js 头文件找不到**
    - 使用 MSYS2 安装的 Node.js：`pacman -S mingw-w64-x86_64-nodejs`
    - 或确保系统 Node.js 安装正确
+
+4. **pkg-config 找不到库**
+   - 确保 PKG_CONFIG_PATH 包含 MSYS2 路径：`export PKG_CONFIG_PATH="/mingw64/lib/pkgconfig"`
+   - 验证库是否正确安装：`pkg-config --list-all | grep fftw`
+
+5. **npx 命令找不到**
+   - 如果使用系统 Node.js，确保 npm 全局安装目录在 PATH 中
+   - 或在 MSYS2 中安装 Node.js：`pacman -S mingw-w64-x86_64-nodejs`
 
 ### macOS 常见问题
 

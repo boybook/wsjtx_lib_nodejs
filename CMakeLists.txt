@@ -22,6 +22,24 @@ if(WIN32 AND MSVC)
     message(FATAL_ERROR "MSVC compiler detected. This project requires MinGW-w64. Please use MSYS2/MinGW-w64 environment and specify -G \"MinGW Makefiles\"")
 endif()
 
+# Windows MinGW-w64 specific setup
+if(WIN32 AND CMAKE_COMPILER_IS_GNUCXX)
+    message(STATUS "Detected MinGW-w64 environment on Windows")
+    
+    # Set PKG_CONFIG_PATH for MSYS2
+    if(EXISTS "C:/msys64/mingw64/lib/pkgconfig")
+        set(ENV{PKG_CONFIG_PATH} "C:/msys64/mingw64/lib/pkgconfig")
+        message(STATUS "Set PKG_CONFIG_PATH to C:/msys64/mingw64/lib/pkgconfig")
+    endif()
+    
+    # Add MSYS2 library and include paths
+    if(EXISTS "C:/msys64/mingw64")
+        include_directories("C:/msys64/mingw64/include")
+        link_directories("C:/msys64/mingw64/lib")
+        message(STATUS "Added MSYS2 include and library paths")
+    endif()
+endif()
+
 # Set compiler flags for better compatibility
 if(UNIX AND NOT APPLE)
     # Linux specific flags

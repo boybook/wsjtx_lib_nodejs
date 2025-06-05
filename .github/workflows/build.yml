@@ -140,15 +140,30 @@ jobs:
             mingw-w64-x86_64-boost
             mingw-w64-x86_64-gcc-fortran
 
-      # 4. 安装 npm 依赖
+      # 4. 设置 Windows 环境变量和路径
+      - name: Setup Windows environment
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: |
+          # 确保系统 Node.js 和 npm 在 PATH 中
+          export PATH="/c/Program Files/nodejs:$PATH"
+          echo "PATH=/c/Program Files/nodejs:$PATH" >> $GITHUB_ENV
+          
+          # 验证 Node.js 和 npm 是否可用
+          echo "Checking Node.js and npm availability..."
+          which node && node --version
+          which npm && npm --version
+          which npx && npx --version
+
+      # 5. 安装 npm 依赖
       - name: Install npm dependencies
         run: npm ci --ignore-scripts
 
-      # 5. 构建 TypeScript
+      # 6. 构建 TypeScript
       - name: Build TypeScript
         run: npm run build:ts
 
-      # 6. 构建原生模块 - Linux/macOS
+      # 7. 构建原生模块 - Linux/macOS
       - name: Build native module (Linux/macOS)
         if: runner.os != 'Windows'
         run: |
@@ -168,41 +183,35 @@ jobs:
             npx cmake-js compile --arch=${{ matrix.cmake_arch }}
           fi
 
-      # 6. 构建原生模块 - Windows MSYS2/MinGW-w64
+      # 7. 构建原生模块 - Windows MSYS2/MinGW-w64
       - name: Build native module (Windows MSYS2)
         if: runner.os == 'Windows'
-        shell: msys2 {0}
+        shell: cmd
         run: |
           echo "=== Building with MSYS2/MinGW-w64 toolchain ==="
+          echo "Using system Node.js with MSYS2 MinGW-w64 toolchain"
           
-          # 验证工具链
-          echo "Checking toolchain..."
-          which gcc && gcc --version
-          which g++ && g++ --version
-          which gfortran && gfortran --version
-          which cmake && cmake --version
-          which pkg-config && pkg-config --version
-          
-          # 设置环境变量确保使用MinGW工具链
-          export CC=gcc
-          export CXX=g++
-          export FC=gfortran
-          
-          # 清理构建目录
-          rm -rf build/
+          rem 清理构建目录
+          if exist build rmdir /s /q build
           
           echo "Starting cmake-js compilation with MinGW Makefiles..."
           
-          # 使用 MinGW Makefiles 生成器构建
-          npx cmake-js compile --arch=${{ matrix.cmake_arch }} \
-            -- -G "MinGW Makefiles" \
-            -DCMAKE_C_COMPILER=gcc \
-            -DCMAKE_CXX_COMPILER=g++ \
-            -DCMAKE_Fortran_COMPILER=gfortran \
-            -DCMAKE_MAKE_PROGRAM=mingw32-make \
+          rem 设置环境变量
+          set "CC=C:/msys64/mingw64/bin/gcc.exe"
+          set "CXX=C:/msys64/mingw64/bin/g++.exe"
+          set "FC=C:/msys64/mingw64/bin/gfortran.exe"
+          
+          rem 使用 MinGW Makefiles 生成器构建
+          npx cmake-js compile --arch=${{ matrix.cmake_arch }} ^
+            -- -G "MinGW Makefiles" ^
+            -DCMAKE_C_COMPILER=C:/msys64/mingw64/bin/gcc.exe ^
+            -DCMAKE_CXX_COMPILER=C:/msys64/mingw64/bin/g++.exe ^
+            -DCMAKE_Fortran_COMPILER=C:/msys64/mingw64/bin/gfortran.exe ^
+            -DCMAKE_MAKE_PROGRAM=C:/msys64/mingw64/bin/mingw32-make.exe ^
+            -DPKG_CONFIG_EXECUTABLE=C:/msys64/mingw64/bin/pkg-config.exe ^
             --verbose
 
-      # 7. 运行测试
+      # 8. 运行测试
       - name: Run tests
         run: |
           # 显示编译后的文件结构
@@ -229,7 +238,7 @@ jobs:
           fi
         shell: bash
 
-      # 8. 创建预构建二进制文件
+      # 9. 创建预构建二进制文件
       - name: Create prebuilt binaries
         run: |
           # 创建目标目录
@@ -243,7 +252,7 @@ jobs:
           ls -la prebuilds/${{ matrix.os }}-${{ matrix.arch }}/
         shell: bash
 
-      # 9. 上传构建产物到 artifacts
+      # 10. 上传构建产物到 artifacts
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -252,7 +261,7 @@ jobs:
           retention-days: 30
           if-no-files-found: error
 
-      # 10. 上传完整构建目录（用于调试）
+      # 11. 上传完整构建目录（用于调试）
       - name: Upload build directory for debugging
         if: failure()
         uses: actions/upload-artifact@v4
