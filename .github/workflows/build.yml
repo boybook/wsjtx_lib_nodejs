@@ -296,127 +296,112 @@ jobs:
           fi
         shell: bash
 
-      # 10a. 运行测试 - Windows (PowerShell)
+      # 10a. 运行测试 - Windows (MSYS2/MinGW)
       - name: Run tests (Windows)
         if: runner.os == 'Windows'
+        shell: msys2 {0}
         run: |
-          Write-Host "📁 Checking compiled files structure:" -ForegroundColor Cyan
+          echo "📁 Checking compiled files structure:"
           
-          if (Test-Path "dist") {
-            Get-ChildItem -Path "dist" -Recurse | Where-Object { $_.Extension -eq ".js" } | Select-Object FullName
-          } else {
-            Write-Host "dist directory not found" -ForegroundColor Yellow
-          }
+          if [ -d "dist" ]; then
+            find dist -name "*.js" -type f | head -10
+          else
+            echo "dist directory not found"
+          fi
           
           # 检查测试文件是否存在
-          $testFile = "dist/test/wsjtx.basic.test.js"
-          if (Test-Path $testFile) {
-            Write-Host "✅ Basic test file found: $testFile" -ForegroundColor Green
+          if [ -f "dist/test/wsjtx.basic.test.js" ]; then
+            echo "✅ Basic test file found: dist/test/wsjtx.basic.test.js"
             
             # 检查原生模块是否存在
-            $directModule = "build/wsjtx_lib_nodejs.node"
-            $releaseModule = "build/Release/wsjtx_lib_nodejs.node"
-            
-            if (Test-Path $directModule) {
-              Write-Host "✅ Native module found: $directModule" -ForegroundColor Green
-              Get-Item $directModule | Select-Object Name, Length, LastWriteTime
+            if [ -f "build/wsjtx_lib_nodejs.node" ]; then
+              echo "✅ Native module found: build/wsjtx_lib_nodejs.node"
+              ls -la build/wsjtx_lib_nodejs.node
               
-              # 检查依赖库 - 使用MSYS2环境检查
-              Write-Host "🔍 Checking module dependencies..." -ForegroundColor Cyan
+              # 检查模块依赖
+              echo "🔍 Checking module dependencies..."
+              if command -v ldd >/dev/null 2>&1; then
+                ldd build/wsjtx_lib_nodejs.node || echo "ldd failed, trying objdump"
+              fi
               
-              # 在MSYS2环境中检查依赖
-              $dependencies = C:\msys64\usr\bin\bash.exe -c "objdump -p '$directModule' | grep 'DLL Name' | awk '{print `$3}'"
-              Write-Host "Required DLLs:" -ForegroundColor Yellow
-              $dependencies | ForEach-Object { Write-Host "  - $_" -ForegroundColor Gray }
+              echo ""
+              echo "🔍 Checking DLL dependencies with objdump:"
+              objdump -p build/wsjtx_lib_nodejs.node | grep "DLL Name" || echo "objdump failed"
               
-              # 查找并复制必要的DLL
-              Write-Host "🔍 Locating and copying required DLLs..." -ForegroundColor Cyan
-              $msys2Bin = "C:\msys64\mingw64\bin"
-              $buildDir = "build"
+              # 检查关键库是否在PATH中可用
+              echo ""
+              echo "🔍 Checking library availability in MinGW environment:"
+              echo "PATH directories with libraries:"
+              echo $PATH | tr ':' '\n' | while read dir; do
+                if [ -d "$dir" ] && ls "$dir"/*.dll >/dev/null 2>&1; then
+                  echo "  📁 $dir"
+                  ls "$dir"/libfftw* "$dir"/libgfortran* "$dir"/libgcc* 2>/dev/null | head -3 || true
+                fi
+              done
               
-              # 需要复制的DLL列表（排除系统DLL）
-              $requiredDlls = @(
-                "libfftw3f-3.dll",
-                "libfftw3f_threads-3.dll", 
-                "libgcc_s_seh-1.dll",
-                "libgfortran-5.dll",
-                "libwinpthread-1.dll",
-                "libstdc++-6.dll"
-              )
+              # 设置环境变量以确保库能被找到
+              echo ""
+              echo "🔧 Setting up library paths for testing..."
+              export PATH="/mingw64/bin:$PATH"
+              export LD_LIBRARY_PATH="/mingw64/lib:$LD_LIBRARY_PATH"
               
-              $foundDlls = 0
-              foreach ($dll in $requiredDlls) {
-                $sourcePath = Join-Path $msys2Bin $dll
-                $targetPath = Join-Path $buildDir $dll
+              echo "Updated PATH (first few entries):"
+              echo $PATH | tr ':' '\n' | head -3
+              
+              # 验证Node.js和npm在MinGW环境中可用
+              echo ""
+              echo "🔍 Verifying Node.js environment:"
+              which node && node --version || echo "Node.js not found in MinGW PATH"
+              which npm && npm --version || echo "npm not found in MinGW PATH"
+              
+              # 运行测试
+              echo ""
+              echo "🧪 Running tests in MinGW environment..."
+              
+              # 如果MinGW环境中的Node.js不可用，使用系统Node.js但确保DLL路径正确
+              if ! command -v node >/dev/null 2>&1; then
+                echo "Using system Node.js with MinGW library paths..."
+                export PATH="/c/Program Files/nodejs:$PATH"
+              fi
+              
+              # 运行测试
+              npm test
+              test_result=$?
+              
+              if [ $test_result -eq 0 ]; then
+                echo "✅ Tests passed!"
+              else
+                echo "❌ Test failed with exit code: $test_result"
                 
-                if (Test-Path $sourcePath) {
-                  Copy-Item $sourcePath $targetPath -Force
-                  Write-Host "  ✅ Copied: $dll" -ForegroundColor Green
-                  $foundDlls++
-                } else {
-                  Write-Host "  ❌ Missing: $dll" -ForegroundColor Red
-                }
-              }
-              
-              Write-Host "📊 Found and copied $foundDlls/$($requiredDlls.Count) required DLLs" -ForegroundColor Cyan
-              
-              # 显示build目录内容
-              Write-Host "📁 Build directory contents:" -ForegroundColor Cyan
-              Get-ChildItem -Path $buildDir | Select-Object Name, Length
-              
-              # 添加build目录到PATH（这样Node.js可以找到DLL）
-              $originalPath = $env:PATH
-              $buildDirFullPath = (Resolve-Path $buildDir).Path
-              $env:PATH = "$buildDirFullPath;$msys2Bin;$env:PATH"
-              Write-Host "🔧 Added build directory and MSYS2 bin to PATH" -ForegroundColor Yellow
-              
-              try {
-                # 运行基础测试
-                Write-Host "🧪 Running npm test..." -ForegroundColor Cyan
-                npm test
+                # 尝试直接加载模块
+                echo "🔍 Trying to load module directly..."
+                node -e "try { require('./build/wsjtx_lib_nodejs.node'); console.log('✅ Module loaded successfully'); } catch(e) { console.error('❌ Load error:', e.message); console.error('   Code:', e.code); }"
                 
-                if ($LASTEXITCODE -eq 0) {
-                  Write-Host "✅ Tests passed!" -ForegroundColor Green
-                } else {
-                  Write-Host "❌ Test failed with exit code: $LASTEXITCODE" -ForegroundColor Red
-                  
-                  # 尝试直接加载模块看看具体错误
-                  Write-Host "🔍 Trying to load module directly..." -ForegroundColor Cyan
-                  node -e "try { require('./build/wsjtx_lib_nodejs.node'); console.log('Module loaded successfully'); } catch(e) { console.error('Load error:', e.message); }"
-                  
-                  exit $LASTEXITCODE
-                }
-              } finally {
-                # 恢复原PATH
-                $env:PATH = $originalPath
-              }
+                exit $test_result
+              fi
               
-            } elseif (Test-Path $releaseModule) {
-              Write-Host "✅ Native module found: $releaseModule" -ForegroundColor Green
-              Get-Item $releaseModule | Select-Object Name, Length, LastWriteTime
+            elif [ -f "build/Release/wsjtx_lib_nodejs.node" ]; then
+              echo "✅ Native module found: build/Release/wsjtx_lib_nodejs.node"
+              ls -la build/Release/wsjtx_lib_nodejs.node
               
               # 运行基础测试
-              Write-Host "Running npm test..." -ForegroundColor Cyan
+              echo "🧪 Running npm test..."
               npm test
-              if ($LASTEXITCODE -ne 0) {
-                Write-Host "❌ Test failed with exit code: $LASTEXITCODE" -ForegroundColor Red
-                exit $LASTEXITCODE
-              }
-            } else {
-              Write-Host "❌ Native module not found! Searching for .node files..." -ForegroundColor Red
-              Get-ChildItem -Path . -Recurse -Filter "*.node" | Select-Object FullName
-              if ($?) {
-                Write-Host "No .node files found" -ForegroundColor Red
-              }
+              if [ $? -ne 0 ]; then
+                echo "❌ Test failed"
+                exit 1
+              fi
+            else
+              echo "❌ Native module not found! Searching for .node files..."
+              find . -name "*.node" -type f || echo "No .node files found"
               exit 1
-            }
-          } else {
-            Write-Host "❌ Basic test file not found!" -ForegroundColor Red
-            Write-Host "Available test files:" -ForegroundColor Yellow
-            Get-ChildItem -Path "dist" -Recurse -Filter "*.test.js" | Select-Object FullName
+            fi
+          else
+            echo "❌ Basic test file not found!"
+            echo "Available test files:"
+            find dist -name "*.test.js" -type f || echo "No test files found"
             exit 1
-          }
-        shell: pwsh
+          fi
 
       # 11. 创建预构建二进制文件 - Linux/macOS
       - name: Create prebuilt binaries (Linux/macOS)
