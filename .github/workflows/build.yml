@@ -435,16 +435,41 @@ jobs:
           if [ -f "build/Release/wsjtx_lib_nodejs.node" ]; then
             cp build/Release/wsjtx_lib_nodejs.node "$TARGET_DIR/"
             echo "Copied from build/Release/"
+            NODE_FILE="build/Release/wsjtx_lib_nodejs.node"
           elif [ -f "build/wsjtx_lib_nodejs.node" ]; then
             cp build/wsjtx_lib_nodejs.node "$TARGET_DIR/"
             echo "Copied from build/"
+            NODE_FILE="build/wsjtx_lib_nodejs.node"
           else
             echo "❌ Native module not found for packaging!"
             exit 1
           fi
           
+          # 检查并复制动态依赖库
+          echo "🔍 Checking dynamic dependencies..."
+          
+          if [ "${{ runner.os }}" = "Linux" ]; then
+            echo "Checking Linux shared libraries..."
+            ldd "$NODE_FILE" | grep -v "linux-vdso\|ld-linux\|libc\|libm\|libpthread\|libdl" | awk '{print $3}' | grep -v "not found" | while read lib; do
+              if [ -f "$lib" ] && [[ "$lib" == *"libfftw"* || "$lib" == *"libgfortran"* || "$lib" == *"libgcc"* ]]; then
+                lib_name=$(basename "$lib")
+                echo "📦 Bundling: $lib_name"
+                cp "$lib" "$TARGET_DIR/"
+              fi
+            done
+          elif [ "${{ runner.os }}" = "macOS" ]; then
+            echo "Checking macOS dynamic libraries..."
+            otool -L "$NODE_FILE" | grep -E "(libfftw|libgfortran|libgcc)" | awk '{print $1}' | while read lib; do
+              if [ -f "$lib" ]; then
+                lib_name=$(basename "$lib")
+                echo "📦 Bundling: $lib_name"
+                cp "$lib" "$TARGET_DIR/"
+              fi
+            done
+          fi
+          
           # 显示构建结果
-          echo "构建完成的文件:"
+          echo "📁 构建完成的文件:"
           ls -la "$TARGET_DIR"
           
           # 创建构建信息文件
@@ -455,63 +480,98 @@ jobs:
             "node_version": "${{ env.NODE_VERSION }}",
             "build_time": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
             "cmake_arch": "${{ matrix.cmake_arch }}",
-            "file_size": $(stat -c%s "$TARGET_DIR"/*.node 2>/dev/null || stat -f%z "$TARGET_DIR"/*.node 2>/dev/null || echo "unknown")
+            "file_size": $(stat -c%s "$TARGET_DIR"/*.node 2>/dev/null || stat -f%z "$TARGET_DIR"/*.node 2>/dev/null || echo "unknown"),
+            "bundled_libraries": $(ls "$TARGET_DIR" | grep -E "\\.(so|dylib)$" | wc -l)
           }
           EOF
           
-          echo "构建信息:"
+          echo "📋 构建信息:"
           cat "$TARGET_DIR/build-info.json"
         shell: bash
 
-      # 11a. 创建预构建二进制文件 - Windows (PowerShell)
+      # 11a. 创建预构建二进制文件 - Windows (MSYS2)
       - name: Create prebuilt binaries (Windows)
         if: runner.os == 'Windows'
+        shell: msys2 {0}
         run: |
           # 创建目标目录
-          $targetDir = "prebuilds/${{ matrix.os }}-${{ matrix.arch }}"
-          Write-Host "Creating target directory: $targetDir" -ForegroundColor Cyan
-          New-Item -ItemType Directory -Path $targetDir -Force | Out-Null
+          TARGET_DIR="prebuilds/${{ matrix.os }}-${{ matrix.arch }}"
+          echo "📁 Creating target directory: $TARGET_DIR"
+          mkdir -p "$TARGET_DIR"
           
           # 复制构建的 .node 文件 - 检查两个可能的位置
-          $releaseModule = "build/Release/wsjtx_lib_nodejs.node"
-          $directModule = "build/wsjtx_lib_nodejs.node"
-          
-          if (Test-Path $releaseModule) {
-            Copy-Item $releaseModule "$targetDir/" -Force
-            Write-Host "✅ Copied from build/Release/" -ForegroundColor Green
-          } elseif (Test-Path $directModule) {
-            Copy-Item $directModule "$targetDir/" -Force
-            Write-Host "✅ Copied from build/" -ForegroundColor Green
-          } else {
-            Write-Host "❌ Native module not found for packaging!" -ForegroundColor Red
+          if [ -f "build/Release/wsjtx_lib_nodejs.node" ]; then
+            cp build/Release/wsjtx_lib_nodejs.node "$TARGET_DIR/"
+            echo "✅ Copied from build/Release/"
+            NODE_FILE="build/Release/wsjtx_lib_nodejs.node"
+          elif [ -f "build/wsjtx_lib_nodejs.node" ]; then
+            cp build/wsjtx_lib_nodejs.node "$TARGET_DIR/"
+            echo "✅ Copied from build/"
+            NODE_FILE="build/wsjtx_lib_nodejs.node"
+          else
+            echo "❌ Native module not found for packaging!"
             exit 1
-          }
+          fi
           
-          # 显示构建结果
-          Write-Host "构建完成的文件:" -ForegroundColor Cyan
-          Get-ChildItem -Path $targetDir | Select-Object Name, Length, LastWriteTime
+          # 检查并复制必要的DLL依赖
+          echo "🔍 Analyzing DLL dependencies..."
+          
+          # 获取DLL依赖列表
+          REQUIRED_DLLS=$(objdump -p "$NODE_FILE" | grep "DLL Name" | awk '{print $3}' | grep -E "(libfftw|libgfortran|libgcc|libwinpthread|libstdc)")
+          
+          echo "📦 Required DLLs to bundle:"
+          for dll in $REQUIRED_DLLS; do
+            echo "  - $dll"
+          done
+          
+          # 从MinGW复制必要的DLL
+          echo ""
+          echo "📋 Copying DLLs from MinGW..."
+          bundled_count=0
+          
+          for dll in $REQUIRED_DLLS; do
+            if [ -f "/mingw64/bin/$dll" ]; then
+              cp "/mingw64/bin/$dll" "$TARGET_DIR/"
+              echo "  ✅ Bundled: $dll"
+              ((bundled_count++))
+            else
+              echo "  ❌ Missing: $dll"
+            fi
+          done
+          
+          # 显示最终结果
+          echo ""
+          echo "📁 Final package contents:"
+          ls -la "$TARGET_DIR"
           
           # 获取文件大小
-          $nodeFile = Get-ChildItem -Path "$targetDir/*.node" | Select-Object -First 1
-          $fileSize = if ($nodeFile) { $nodeFile.Length } else { "unknown" }
+          node_size=$(stat -c%s "$TARGET_DIR"/*.node)
+          total_size=$(du -sb "$TARGET_DIR" | cut -f1)
           
           # 创建构建信息文件
-          $buildInfo = @{
-            platform = "${{ matrix.os }}"
-            arch = "${{ matrix.arch }}"
-            node_version = "${{ env.NODE_VERSION }}"
-            build_time = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
-            cmake_arch = "${{ matrix.cmake_arch }}"
-            file_size = $fileSize
+          cat > "$TARGET_DIR/build-info.json" << EOF
+          {
+            "platform": "${{ matrix.os }}",
+            "arch": "${{ matrix.arch }}",
+            "node_version": "${{ env.NODE_VERSION }}",
+            "build_time": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "cmake_arch": "${{ matrix.cmake_arch }}",
+            "file_size": $node_size,
+            "bundled_libraries": $bundled_count,
+            "total_package_size": $total_size,
+            "bundled_dlls": [$(echo "$REQUIRED_DLLS" | sed 's/^/"/;s/$/"/' | paste -sd, -)]
           }
+          EOF
           
-          $buildInfoJson = $buildInfo | ConvertTo-Json -Depth 2
-          $buildInfoPath = "$targetDir/build-info.json"
-          $buildInfoJson | Out-File -FilePath $buildInfoPath -Encoding UTF8
+          echo ""
+          echo "📋 构建信息:"
+          cat "$TARGET_DIR/build-info.json"
           
-          Write-Host "构建信息:" -ForegroundColor Cyan
-          Get-Content $buildInfoPath
-        shell: pwsh
+          echo ""
+          echo "📊 Package summary:"
+          echo "  • Native module: $(basename $NODE_FILE) ($(numfmt --to=iec $node_size))"
+          echo "  • Bundled DLLs: $bundled_count"
+          echo "  • Total size: $(numfmt --to=iec $total_size)"
 
       # 12. 上传构建产物到 artifacts
       - name: Upload build artifacts

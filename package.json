@@ -20,6 +20,12 @@
     "README.md",
     "LICENSE"
   ],
+  "binary": {
+    "module_name": "wsjtx_lib_nodejs",
+    "module_path": "./prebuilds/{platform}-{arch}/",
+    "host": "https://github.com/boybook/wsjtx_lib_nodejs/releases/download/",
+    "remote_path": "v{version}"
+  },
   "scripts": {
     "prebuild": "prebuild-install",
     "build": "npm run build:native && npm run build:ts",
@@ -30,7 +36,9 @@
     "clean": "cmake-js clean && rimraf dist",
     "test": "node --test dist/test/wsjtx.basic.test.js",
     "test:full": "npm run build:dev && node --test dist/test/wsjtx.test.js",
-    "prepare": "npm run build:ts"
+    "prepare": "npm run build:ts",
+    "package": "node scripts/package-prebuilds.js",
+    "prepublishOnly": "npm run build:ts && npm run package"
   },
   "keywords": [
     "wsjtx",

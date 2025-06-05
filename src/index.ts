@@ -52,20 +52,28 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // Determine the correct path to the native module
-// Different build systems may place the module in different locations:
-// - MinGW/MSYS2: '../build/wsjtx_lib_nodejs.node'
-// - MSVC/other: '../build/Release/wsjtx_lib_nodejs.node'
-// - From dist/src/: '../../build/wsjtx_lib_nodejs.node' or '../../build/Release/wsjtx_lib_nodejs.node'
+// Priority order:
+// 1. Prebuilt binaries (for npm published packages)
+// 2. Local build output (for development)
 function findNativeModule(): string {
+  const platform = process.platform;
+  const arch = process.arch;
+  
   const possiblePaths = [
-    // Direct build output (MinGW/MSYS2, etc.)
-    path.resolve(__dirname, '..', 'build', 'wsjtx_lib_nodejs.node'),
-    // Release subdirectory (MSVC, cmake default, etc.)
-    path.resolve(__dirname, '..', 'build', 'Release', 'wsjtx_lib_nodejs.node'),
+    // 1. Prebuilt binaries (npm packages) - highest priority
+    path.resolve(__dirname, '..', 'prebuilds', `${platform}-${arch}`, 'wsjtx_lib_nodejs.node'),
+    path.resolve(__dirname, '..', 'prebuilds', `${platform}-latest-${arch}`, 'wsjtx_lib_nodejs.node'), // GitHub Actions format
+    
+    // 2. Local development builds - second priority
     // From dist/src/ - direct build output
     path.resolve(__dirname, '..', '..', 'build', 'wsjtx_lib_nodejs.node'),
     // From dist/src/ - Release subdirectory
     path.resolve(__dirname, '..', '..', 'build', 'Release', 'wsjtx_lib_nodejs.node'),
+    
+    // 3. Direct build output (when running from src/)
+    path.resolve(__dirname, '..', 'build', 'wsjtx_lib_nodejs.node'),
+    // Release subdirectory (MSVC, cmake default, etc.)
+    path.resolve(__dirname, '..', 'build', 'Release', 'wsjtx_lib_nodejs.node'),
   ];
 
   for (const modulePath of possiblePaths) {
@@ -77,8 +85,12 @@ function findNativeModule(): string {
   // If no module found, throw a helpful error with all attempted paths
   const pathList = possiblePaths.map(p => `  - ${p}`).join('\n');
   throw new Error(
-    `Native module not found. Searched in:\n${pathList}\n\n` +
-    'Please run "npm run build" to compile the native module.'
+    `Native module not found for ${platform}-${arch}.\n` +
+    `Searched in:\n${pathList}\n\n` +
+    'Solutions:\n' +
+    '1. If you installed via npm, this may be a missing prebuilt binary\n' +
+    '2. For development, run "npm run build" to compile the native module\n' +
+    '3. Check if your platform/architecture is supported'
   );
 }
 
