@@ -40,12 +40,11 @@ pacman -S --needed \
   mingw-w64-x86_64-pkg-config \
   mingw-w64-x86_64-fftw \
   mingw-w64-x86_64-boost \
-  mingw-w64-x86_64-gcc-fortran
+  mingw-w64-x86_64-gcc-fortran \
+  mingw-w64-x86_64-nodejs
 ```
 
-**注意**：在 GitHub Actions 中，我们使用系统安装的 Node.js 配合 MSYS2 的编译工具链。如果在本地开发，你可以选择：
-1. 在 MSYS2 中安装 Node.js：`pacman -S mingw-w64-x86_64-nodejs`
-2. 或者使用系统 Node.js 配合 MSYS2 编译工具
+**注意**：npm 随 Node.js 一起安装，无需单独安装。为了确保最佳兼容性，建议使用 MSYS2 版本的 Node.js。
 
 ## 构建步骤
 

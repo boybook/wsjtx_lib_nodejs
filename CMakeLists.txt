@@ -17,27 +17,49 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # Enable position independent code for all targets (including subprojects)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
-# Force avoid MSVC detection on Windows when using MinGW
-if(WIN32 AND MSVC)
-    message(FATAL_ERROR "MSVC compiler detected. This project requires MinGW-w64. Please use MSYS2/MinGW-w64 environment and specify -G \"MinGW Makefiles\"")
+# Include cmake-js - this must come first to get CMAKE_JS_* variables
+if(CMAKE_JS_INC)
+    include_directories(${CMAKE_JS_INC})
 endif()
 
-# Windows MinGW-w64 specific setup
-if(WIN32 AND CMAKE_COMPILER_IS_GNUCXX)
+# Add Node.js include path for node_api.h
+execute_process(
+    COMMAND node -p "require('path').dirname(process.execPath) + '/../include/node'"
+    OUTPUT_VARIABLE NODE_INCLUDE_DIR
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+)
+include_directories(${NODE_INCLUDE_DIR})
+
+# **关键修复**: Windows + MinGW 环境检测并清除 MSVC 特定标志
+if(WIN32 AND CMAKE_CXX_COMPILER_ID MATCHES "GNU")
     message(STATUS "Detected MinGW-w64 environment on Windows")
     
-    # Set PKG_CONFIG_PATH for MSYS2
+    # 设置 PKG_CONFIG_PATH 以便查找 MSYS2 库
     if(EXISTS "C:/msys64/mingw64/lib/pkgconfig")
         set(ENV{PKG_CONFIG_PATH} "C:/msys64/mingw64/lib/pkgconfig")
         message(STATUS "Set PKG_CONFIG_PATH to C:/msys64/mingw64/lib/pkgconfig")
     endif()
     
-    # Add MSYS2 library and include paths
+    # 添加 MSYS2 的 include 和 library 路径
     if(EXISTS "C:/msys64/mingw64")
         include_directories("C:/msys64/mingw64/include")
         link_directories("C:/msys64/mingw64/lib")
         message(STATUS "Added MSYS2 include and library paths")
     endif()
+    
+    # **关键**: 清空 cmake-js 可能添加的 MSVC 专属链接标志 (/DELAYLOAD:NODE.EXE)
+    set(CMAKE_SHARED_LINKER_FLAGS "")
+    message(STATUS "Cleared MSVC-specific linker flags for MinGW compatibility")
+endif()
+
+# Force avoid MSVC detection on Windows when using MinGW
+if(WIN32 AND MSVC)
+    message(FATAL_ERROR "MSVC compiler detected. This project requires MinGW-w64. Please use MSYS2/MinGW-w64 environment and specify -G \"MinGW Makefiles\"")
+endif()
+
+# Additional check for cmake-js on Windows - prevent Visual Studio generator
+if(WIN32 AND CMAKE_GENERATOR MATCHES "Visual Studio")
+    message(FATAL_ERROR "Visual Studio generator detected. This project requires MinGW-w64. Please set CMAKE_GENERATOR=MinGW Makefiles")
 endif()
 
 # Set compiler flags for better compatibility
@@ -78,19 +100,6 @@ elseif(WIN32)
     endif()
 endif()
 
-# Include cmake-js
-if(CMAKE_JS_INC)
-    include_directories(${CMAKE_JS_INC})
-endif()
-
-# Add Node.js include path for node_api.h
-execute_process(
-    COMMAND node -p "require('path').dirname(process.execPath) + '/../include/node'"
-    OUTPUT_VARIABLE NODE_INCLUDE_DIR
-    OUTPUT_STRIP_TRAILING_WHITESPACE
-)
-include_directories(${NODE_INCLUDE_DIR})
-
 # Use pkg-config for all platforms (including Windows with MSYS2)
 find_package(PkgConfig REQUIRED)
 
@@ -99,9 +108,39 @@ if(POLICY CMP0167)
     cmake_policy(SET CMP0167 NEW)
 endif()
 
-# Find Boost
-find_package(Boost REQUIRED)
-set(BOOST_LIBRARIES ${Boost_LIBRARIES})
+# Find Boost - use different methods based on platform
+if(WIN32 AND CMAKE_CXX_COMPILER_ID MATCHES "GNU")
+    # Windows with MinGW-w64: try both find_package and manual detection
+    find_package(Boost QUIET)
+    if(NOT Boost_FOUND)
+        # Manual detection for MSYS2 Boost
+        message(STATUS "Boost not found via find_package, trying manual detection...")
+        
+        # Look for Boost in MSYS2 locations
+        find_path(Boost_INCLUDE_DIRS 
+            NAMES boost/version.hpp
+            PATHS /mingw64/include C:/msys64/mingw64/include
+            NO_DEFAULT_PATH
+        )
+        
+        if(Boost_INCLUDE_DIRS)
+            message(STATUS "Found Boost headers at: ${Boost_INCLUDE_DIRS}")
+            set(Boost_FOUND TRUE)
+            # For header-only libraries, we don't need to link anything
+            set(BOOST_LIBRARIES "")
+        else()
+            message(WARNING "Boost headers not found")
+            set(BOOST_LIBRARIES "")
+        endif()
+    else()
+        message(STATUS "Boost found via find_package: ${Boost_VERSION}")
+        set(BOOST_LIBRARIES ${Boost_LIBRARIES})
+    endif()
+else()
+    # Other platforms: use standard find_package
+    find_package(Boost REQUIRED)
+    set(BOOST_LIBRARIES ${Boost_LIBRARIES})
+endif()
 
 # Find FFTW3 using pkg-config
 pkg_check_modules(FFTW3F REQUIRED fftw3f)
@@ -270,11 +309,27 @@ link_directories(${FFTW3F_LIBRARY_DIRS})
 # Source files for the Node.js addon
 file(GLOB_RECURSE NATIVE_SOURCES "native/*.cpp" "native/*.h")
 
-# Create the Node.js addon
-add_library(${PROJECT_NAME} SHARED 
-    ${NATIVE_SOURCES}
-    ${CMAKE_JS_SRC}
-)
+# Create the Node.js addon with MinGW-specific handling
+if(WIN32 AND CMAKE_CXX_COMPILER_ID MATCHES "GNU")
+    # MinGW build: exclude Windows delay load hook
+    add_library(${PROJECT_NAME} SHARED 
+        ${NATIVE_SOURCES}
+    )
+    message(STATUS "MinGW build: excluding CMAKE_JS_SRC (Windows delay load hook)")
+else()
+    # Other platforms: include CMAKE_JS_SRC if available
+    if(CMAKE_JS_SRC)
+        add_library(${PROJECT_NAME} SHARED 
+            ${NATIVE_SOURCES}
+            ${CMAKE_JS_SRC}
+        )
+        message(STATUS "Non-MinGW build: including CMAKE_JS_SRC for delay-load hook")
+    else()
+        add_library(${PROJECT_NAME} SHARED 
+            ${NATIVE_SOURCES}
+        )
+    endif()
+endif()
 
 # Set properties for Node.js addon
 set_target_properties(${PROJECT_NAME} PROPERTIES 
@@ -298,9 +353,15 @@ target_compile_definitions(${PROJECT_NAME} PRIVATE
 # Add compile flags
 target_compile_options(${PROJECT_NAME} PRIVATE ${FFTW3F_CFLAGS_OTHER})
 
-# Link libraries
-if(CMAKE_JS_LIB)
-    target_link_libraries(${PROJECT_NAME} PRIVATE ${CMAKE_JS_LIB})
+# Link libraries with MinGW-specific handling
+if(WIN32 AND CMAKE_CXX_COMPILER_ID MATCHES "GNU")
+    # MinGW: don't link CMAKE_JS_LIB as it may cause issues
+    message(STATUS "MinGW build: skipping CMAKE_JS_LIB linking")
+else()
+    # Other platforms: link CMAKE_JS_LIB if available
+    if(CMAKE_JS_LIB)
+        target_link_libraries(${PROJECT_NAME} PRIVATE ${CMAKE_JS_LIB})
+    endif()
 endif()
 
 target_link_libraries(${PROJECT_NAME} PRIVATE
