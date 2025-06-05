@@ -314,10 +314,27 @@ jobs:
             ARTIFACT_PATH="${{ steps.find_artifacts.outputs.artifact_path }}"
             if [ -f "$ARTIFACT_PATH" ]; then
               echo "✅ Native module found: $ARTIFACT_PATH"
+              
+              # 确保原生模块在正确的位置
+              if [ "${{ runner.os }}" = "Windows" ]; then
+                # Windows: 直接使用找到的路径
+                echo "Using native module at: $ARTIFACT_PATH"
+                # 验证文件存在
+                ls -la "$ARTIFACT_PATH"
+              else
+                # Unix: 复制到build目录
+                mkdir -p build
+                cp "$ARTIFACT_PATH" build/
+                echo "Copied native module to build directory"
+                ls -la build/wsjtx_lib_nodejs.node
+              fi
+              
               # 运行基础测试
               npm test
             else
               echo "❌ Native module not found at: $ARTIFACT_PATH"
+              echo "Searching for .node files..."
+              find . -name "*.node" || echo "No .node files found"
               exit 1
             fi
           else

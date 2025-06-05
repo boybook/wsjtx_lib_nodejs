@@ -315,8 +315,12 @@ if(WIN32 AND CMAKE_CXX_COMPILER_ID MATCHES "GNU")
     message(STATUS "MinGW build: using MSYS2 Node.js headers and local node-addon-api")
     message(STATUS "CMAKE_JS_INC: ${CMAKE_JS_INC}")
 else()
-    # 其他平台：使用 cmake-js 提供的头文件路径
-    target_include_directories(${PROJECT_NAME} PRIVATE ${CMAKE_JS_INC})
+    # 其他平台：使用 cmake-js 提供的头文件路径 + 项目的 node-addon-api
+    target_include_directories(${PROJECT_NAME} PRIVATE 
+        ${CMAKE_JS_INC}
+        "${CMAKE_SOURCE_DIR}/node_modules/node-addon-api"
+        "${CMAKE_SOURCE_DIR}/node_modules/node-addon-api/include"
+    )
     message(STATUS "Using cmake-js provided headers: ${CMAKE_JS_INC}")
 endif()
 

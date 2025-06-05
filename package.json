@@ -25,13 +25,11 @@
     "build": "npm run build:native && npm run build:ts",
     "build:dev": "npm run build:native && npm run build:ts",
     "build:native": "cmake-js compile",
-    "build:native:win": "cmake-js compile -- -G \"MinGW Makefiles\" -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DCMAKE_Fortran_COMPILER=gfortran",
+    "build:native:win": "cmake-js compile --generator=\"MinGW Makefiles\"",
     "build:ts": "tsc",
     "clean": "cmake-js clean && rimraf dist",
-    "test": "npm run build:dev && node --test dist/test/wsjtx.basic.test.js",
-    "test:basic": "npm run build:dev && node --test dist/test/wsjtx.basic.test.js",
+    "test": "node --test dist/test/wsjtx.basic.test.js",
     "test:full": "npm run build:dev && node --test dist/test/wsjtx.test.js",
-    "test:only": "node --test dist/test/wsjtx.test.js",
     "prepare": "npm run build:ts"
   },
   "keywords": [
