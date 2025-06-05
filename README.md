@@ -44,7 +44,7 @@ A high-performance Node.js C++ extension for digital amateur radio protocols, pr
 brew install cmake fftw boost gcc
 
 # Clone and install
-git clone --recursive https://github.com/your-repo/wsjtx-lib-nodejs.git
+git clone --recursive https://github.com/boybook/wsjtx_lib_nodejs.git
 cd wsjtx-lib-nodejs
 npm install
 ```
@@ -57,7 +57,7 @@ sudo apt-get update
 sudo apt-get install cmake libfftw3-dev libboost-all-dev gfortran build-essential
 
 # Clone and install
-git clone --recursive https://github.com/your-repo/wsjtx-lib-nodejs.git
+git clone --recursive https://github.com/boybook/wsjtx_lib_nodejs.git
 cd wsjtx-lib-nodejs
 npm install
 ```
@@ -69,7 +69,7 @@ npm install
 # Ensure CMake, FFTW3, Boost, and MinGW-w64 are available
 
 # Clone and install
-git clone --recursive https://github.com/your-repo/wsjtx-lib-nodejs.git
+git clone --recursive https://github.com/boybook/wsjtx_lib_nodejs.git
 cd wsjtx-lib-nodejs
 npm install
 ```

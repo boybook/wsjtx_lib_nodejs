@@ -30,7 +30,7 @@ jobs:
             node_arch: arm64
             cmake_arch: arm64
           
-          # Windows builds with MSVC
+          # Windows builds with MSYS2/MinGW-w64
           - os: windows-latest
             arch: x64
             node_arch: x64
@@ -124,64 +124,21 @@ jobs:
           echo "LIBRARY_PATH=${BREW_PREFIX}/lib:$LIBRARY_PATH" >> $GITHUB_ENV
           echo "LD_LIBRARY_PATH=${BREW_PREFIX}/lib:$LD_LIBRARY_PATH" >> $GITHUB_ENV
 
-      # 3. Windows MSVC 环境设置
-      - name: Setup Visual Studio Build Tools
+      # 3. 设置 MSYS2 环境 - Windows
+      - name: Setup MSYS2 (Windows)
         if: runner.os == 'Windows'
-        uses: microsoft/setup-msbuild@v1
-
-      - name: Setup vcpkg & deps (Windows)
-        if: runner.os == 'Windows'
-        run: |
-          set VCPKG_ROOT=%CD%\vcpkg
-          git clone https://github.com/Microsoft/vcpkg.git %VCPKG_ROOT%
-          %VCPKG_ROOT%\bootstrap-vcpkg.bat
-          rem install float + threads variant so we get fftwf + multithread support
-          %VCPKG_ROOT%\vcpkg install fftw3[float,threads]:x64-windows boost:x64-windows
-          rem expose vcpkg-installed prefix to later cmake invocations
-          echo VCPKG_ROOT=%VCPKG_ROOT%>>%GITHUB_ENV%
-          echo CMAKE_PREFIX_PATH=%VCPKG_ROOT%\installed\x64-windows>>%GITHUB_ENV%
-        shell: cmd
-
-      - name: Strip node rc from PATH (Windows)
-        if: runner.os == 'Windows'
-        run: |
-          rem Delete Node‑wrapped rc scripts that mask the real RC compiler
-          if exist "node_modules\.bin\rc" del /q node_modules\.bin\rc
-          if exist "node_modules\.bin\rc.cmd" del /q node_modules\.bin\rc.cmd
-          if exist "node_modules\.bin\rc.ps1" del /q node_modules\.bin\rc.ps1
-          rem Cache the genuine Windows SDK rc.exe path for CMake
-          for /f "delims=" %%v in ('dir "%ProgramFiles(x86)%\Windows Kits\10\bin" /b /ad ^| sort /r') do if not defined SDKVER set "SDKVER=%%v"
-          echo CMAKE_RC_COMPILER=%ProgramFiles(x86)%\Windows Kits\10\bin\%SDKVER%\x64\rc.exe>>%GITHUB_ENV%
-        shell: cmd
-
-      - name: Setup Intel Fortran
-        if: runner.os == 'Windows'
-        uses: fortran-lang/setup-fortran@v1
+        uses: msys2/setup-msys2@v2
         with:
-          compiler: intel-classic
-          version: '2021.10'
-
-      - name: Verify Intel Fortran installation
-        if: runner.os == 'Windows'
-        run: |
-          echo "=== Verifying Intel Fortran installation ==="
-          echo "Checking for ifort..."
-          where ifort || echo "ifort not found in PATH"
-          echo "Checking for ifx..."
-          where ifx || echo "ifx not found in PATH"
-          
-          echo "Setting up Intel oneAPI environment..."
-          if exist "C:\Program Files (x86)\Intel\oneAPI\setvars.bat" (
-            echo "Calling Intel oneAPI setvars.bat..."
-            call "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
-          ) else (
-            echo "Intel oneAPI setvars.bat not found"
-          )
-          
-          echo "Final check - Fortran compilers available:"
-          where ifort && echo "✅ ifort ready" || echo "❌ ifort not available"
-          where ifx && echo "✅ ifx ready" || echo "❌ ifx not available"
-        shell: cmd
+          msystem: MINGW64
+          update: true
+          install: >-
+            base-devel
+            mingw-w64-x86_64-toolchain
+            mingw-w64-x86_64-cmake
+            mingw-w64-x86_64-pkg-config
+            mingw-w64-x86_64-fftw
+            mingw-w64-x86_64-boost
+            mingw-w64-x86_64-gcc-fortran
 
       # 4. 安装 npm 依赖
       - name: Install npm dependencies
@@ -211,80 +168,39 @@ jobs:
             npx cmake-js compile --arch=${{ matrix.cmake_arch }}
           fi
 
-      # 6. 构建原生模块 - Windows MSVC
-      - name: Build native module (Windows MSVC)
+      # 6. 构建原生模块 - Windows MSYS2/MinGW-w64
+      - name: Build native module (Windows MSYS2)
         if: runner.os == 'Windows'
+        shell: msys2 {0}
         run: |
-          echo "--- Building with MSVC toolchain ---"
+          echo "=== Building with MSYS2/MinGW-w64 toolchain ==="
           
-          echo "Setting up Intel Fortran environment..."
-          if exist "C:\Program Files (x86)\Intel\oneAPI\setvars.bat" (
-            echo "Calling Intel oneAPI setvars.bat..."
-            call "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
-          )
+          # 验证工具链
+          echo "Checking toolchain..."
+          which gcc && gcc --version
+          which g++ && g++ --version
+          which gfortran && gfortran --version
+          which cmake && cmake --version
+          which pkg-config && pkg-config --version
           
-          echo "Setting up MSVC environment..."
-          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
+          # 设置环境变量确保使用MinGW工具链
+          export CC=gcc
+          export CXX=g++
+          export FC=gfortran
           
-          echo "Verifying compilers after environment setup..."
-          where cl && echo "MSVC cl available" || echo "MSVC cl not available"
-          where ifort && echo "ifort available" || echo "ifort not available"
-          where ifx && echo "ifx available" || echo "ifx not available"
+          # 清理构建目录
+          rm -rf build/
           
-          echo "Cleaning build directory..."
-          rmdir /s /q build 2>nul || echo "No build directory to clean"
+          echo "Starting cmake-js compilation with MinGW Makefiles..."
           
-          echo "Starting cmake-js compilation with NMake..."
-          set "IFORT_PATH=C:/Program Files (x86)/Intel/oneAPI/compiler/latest/windows/bin/intel64/ifort.exe"
-          
-          echo "Finding MSVC cl.exe..."
-          for /f "delims=" %%i in ('where cl') do set "MSVC_CL_PATH=%%i"
-          echo "Found MSVC cl.exe at: %MSVC_CL_PATH%"
-          
-          echo "Temporarily renaming Node.js rc to avoid conflicts..."
-          if exist "node_modules\.bin\rc.exe" (
-            ren "node_modules\.bin\rc.exe" "rc.exe.bak"
-            echo "Renamed node_modules\.bin\rc.exe to rc.exe.bak"
-          )
-          if exist "node_modules\.bin\rc" (
-            ren "node_modules\.bin\rc" "rc.bak"
-            echo "Renamed node_modules\.bin\rc to rc.bak"
-          )
-          if exist "node_modules\.bin\rc.cmd" (
-            ren "node_modules\.bin\rc.cmd" "rc.cmd.bak"
-            echo "Renamed node_modules\.bin\rc.cmd to rc.cmd.bak"
-          )
-          if exist "node_modules\.bin\rc.ps1" (
-            ren "node_modules\.bin\rc.ps1" "rc.ps1.bak"
-            echo "Renamed node_modules\.bin\rc.ps1 to rc.ps1.bak"
-          )
-          
-          npx cmake-js compile --arch=${{ matrix.cmake_arch }} ^
-            -G "NMake Makefiles" ^
-            --CDCMAKE_TOOLCHAIN_FILE=vcpkg/scripts/buildsystems/vcpkg.cmake ^
-            --CDCMAKE_C_COMPILER="%MSVC_CL_PATH%" ^
-            --CDCMAKE_CXX_COMPILER="%MSVC_CL_PATH%" ^
-            --CDCMAKE_Fortran_COMPILER="%IFORT_PATH%" ^
+          # 使用 MinGW Makefiles 生成器构建
+          npx cmake-js compile --arch=${{ matrix.cmake_arch }} \
+            -- -G "MinGW Makefiles" \
+            -DCMAKE_C_COMPILER=gcc \
+            -DCMAKE_CXX_COMPILER=g++ \
+            -DCMAKE_Fortran_COMPILER=gfortran \
+            -DCMAKE_MAKE_PROGRAM=mingw32-make \
             --verbose
-          
-          echo "Restoring Node.js rc tools..."
-          if exist "node_modules\.bin\rc.exe.bak" (
-            ren "node_modules\.bin\rc.exe.bak" "rc.exe"
-            echo "Restored node_modules\.bin\rc.exe"
-          )
-          if exist "node_modules\.bin\rc.bak" (
-            ren "node_modules\.bin\rc.bak" "rc"
-            echo "Restored node_modules\.bin\rc"
-          )
-          if exist "node_modules\.bin\rc.cmd.bak" (
-            ren "node_modules\.bin\rc.cmd.bak" "rc.cmd"
-            echo "Restored node_modules\.bin\rc.cmd"
-          )
-          if exist "node_modules\.bin\rc.ps1.bak" (
-            ren "node_modules\.bin\rc.ps1.bak" "rc.ps1"
-            echo "Restored node_modules\.bin\rc.ps1"
-          )
-        shell: cmd
 
       # 7. 运行测试
       - name: Run tests
@@ -320,11 +236,7 @@ jobs:
           mkdir -p prebuilds/${{ matrix.os }}-${{ matrix.arch }}
           
           # 复制构建的 .node 文件
-          if [ "${{ runner.os }}" = "Windows" ]; then
-            cp build/Release/*.node prebuilds/${{ matrix.os }}-${{ matrix.arch }}/
-          else
-            cp build/Release/*.node prebuilds/${{ matrix.os }}-${{ matrix.arch }}/
-          fi
+          cp build/Release/*.node prebuilds/${{ matrix.os }}-${{ matrix.arch }}/
           
           # 显示构建结果
           echo "构建完成的文件:"
