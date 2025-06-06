@@ -9,7 +9,7 @@ A high-performance Node.js C++ extension for digital amateur radio protocols, pr
 - 🔧 **TypeScript Support**: Full TypeScript definitions and modern ES modules
 - ⚡ **Async/Await**: Promise-based API for non-blocking operations
 - 🎵 **Audio Processing**: Support for both Float32Array and Int16Array audio formats
-- 🌍 **Cross-Platform**: Works on Windows, macOS, and Linux
+- 🌍 **Cross-Platform**: Prebuilt binaries for Windows, macOS, and Linux
 - 📊 **WSPR Decoding**: Specialized support for WSPR IQ data processing
 
 ## Supported Modes
@@ -28,50 +28,86 @@ A high-performance Node.js C++ extension for digital amateur radio protocols, pr
 
 ## Installation
 
-### Prerequisites
+### NPM Installation (Recommended)
+
+The package includes prebuilt binaries for major platforms:
+
+```bash
+npm install wsjtx-lib
+```
+
+**Supported platforms with prebuilt binaries:**
+- Linux x64
+- macOS ARM64 (Apple Silicon)
+- Windows x64
+
+### Building from Source
+
+Only needed if prebuilt binaries are not available for your platform.
+
+#### Prerequisites
 
 - Node.js 16+ 
 - CMake 3.15+
 - C++ compiler with C++17 support
-- FFTW3 library
+- FFTW3 library (single precision)
 - Boost libraries
 - Fortran compiler (gfortran)
 
-### macOS
+#### macOS
 
 ```bash
 # Install dependencies using Homebrew
-brew install cmake fftw boost gcc
+brew install cmake fftw boost gcc pkg-config
 
-# Clone and install
+# Clone and build
 git clone --recursive https://github.com/boybook/wsjtx_lib_nodejs.git
-cd wsjtx-lib-nodejs
+cd wsjtx_lib_nodejs
 npm install
+npm run build
 ```
 
-### Linux (Ubuntu/Debian)
+#### Linux (Ubuntu/Debian)
 
 ```bash
 # Install dependencies
 sudo apt-get update
-sudo apt-get install cmake libfftw3-dev libboost-all-dev gfortran build-essential
+sudo apt-get install -y \
+  cmake \
+  build-essential \
+  gfortran \
+  libfftw3-dev \
+  libboost-all-dev \
+  pkg-config
 
-# Clone and install
+# Clone and build
 git clone --recursive https://github.com/boybook/wsjtx_lib_nodejs.git
-cd wsjtx-lib-nodejs
+cd wsjtx_lib_nodejs
 npm install
+npm run build
 ```
 
-### Windows
+#### Windows
+
+Use MSYS2/MinGW-w64 for best compatibility:
 
 ```bash
-# Install dependencies using vcpkg or manually
-# Ensure CMake, FFTW3, Boost, and MinGW-w64 are available
+# Install MSYS2, then in MSYS2 MINGW64 terminal:
+pacman -S --needed \
+  base-devel \
+  mingw-w64-x86_64-toolchain \
+  mingw-w64-x86_64-cmake \
+  mingw-w64-x86_64-pkg-config \
+  mingw-w64-x86_64-fftw \
+  mingw-w64-x86_64-boost \
+  mingw-w64-x86_64-gcc-fortran \
+  mingw-w64-x86_64-nodejs
 
-# Clone and install
+# Clone and build
 git clone --recursive https://github.com/boybook/wsjtx_lib_nodejs.git
-cd wsjtx-lib-nodejs
+cd wsjtx_lib_nodejs
 npm install
+npm run build
 ```
 
 ## Quick Start
@@ -86,27 +122,27 @@ async function example() {
     // Encode an FT8 message
     const encodeResult = await lib.encode(
         WSJTXMode.FT8,
-        'CQ TEST K1ABC FN20',
-        1000  // Audio base frequency in Hz (typically 500-3000 Hz)
+        'CQ DX BH1ABC OM88',
+        1000  // Audio frequency in Hz (typically 500-3000 Hz)
     );
     
     console.log(`Generated ${encodeResult.audioData.length} audio samples`);
-    console.log(`Message: "${encodeResult.messageSent}"`);
+    console.log(`Message sent: "${encodeResult.messageSent}"`);
     
-    // Decode audio data
+    // Decode audio data (example with proper resampling for FT8)
     const audioData = new Float32Array(48000 * 13); // 13 seconds at 48kHz
     // ... fill audioData with actual audio samples ...
     
     const decodeResult = await lib.decode(
         WSJTXMode.FT8,
         audioData,
-        1000  // Same audio base frequency used for encoding
+        1000  // Same audio frequency used for encoding
     );
     
     // Get decoded messages
     const messages = lib.pullMessages();
     messages.forEach(msg => {
-        console.log(`Decoded: "${msg.text}" (SNR: ${msg.snr} dB)`);
+        console.log(`Decoded: "${msg.text}" (SNR: ${msg.snr} dB, ΔT: ${msg.deltaTime}s)`);
     });
 }
 ```
@@ -137,10 +173,12 @@ Decode digital radio signals from audio data.
 **Parameters:**
 - `mode`: WSJTXMode enum value
 - `audioData`: Float32Array or Int16Array of audio samples
-- `frequency`: Audio base frequency in Hz (typically 500-3000 Hz for FT8)
+- `frequency`: Audio frequency in Hz (typically 500-3000 Hz)
 - `threads`: Number of threads to use (optional, default: 4)
 
 **Returns:** Promise resolving to DecodeResult with success status
+
+**Note:** For optimal FT8 decoding, audio may need resampling. See examples for details.
 
 ##### `encode(mode, message, frequency, threads?): Promise<EncodeResult>`
 
@@ -149,7 +187,7 @@ Encode a message into audio waveform for transmission.
 **Parameters:**
 - `mode`: WSJTXMode enum value
 - `message`: Message text to encode (1-22 characters)
-- `frequency`: Audio base frequency in Hz (typically 500-3000 Hz for FT8)
+- `frequency`: Audio frequency in Hz (typically 500-3000 Hz)
 - `threads`: Number of threads to use (optional, default: 4)
 
 **Returns:** Promise resolving to EncodeResult with audio data and actual message sent
@@ -161,6 +199,13 @@ Decode WSPR signals from IQ data.
 **Parameters:**
 - `iqData`: Float32Array of interleaved I,Q samples
 - `options`: WSPRDecodeOptions (optional)
+  - `dialFrequency`: RF dial frequency in Hz (default: 14095600)
+  - `callsign`: Station callsign
+  - `locator`: Grid locator
+  - `quickMode`: Enable quick decode mode (default: false)
+  - `useHashTable`: Use hash table optimization (default: true)
+  - `passes`: Number of decode passes (default: 2)
+  - `subtraction`: Enable signal subtraction (default: true)
 
 **Returns:** Promise resolving to array of WSPR decode results
 
@@ -208,8 +253,6 @@ interface WSJTXMessage {
     snr: number;            // Signal-to-noise ratio in dB
     deltaTime: number;      // Time offset in seconds
     deltaFrequency: number; // Frequency offset in Hz
-    timestamp: number;      // Unix timestamp
-    sync: number;           // Sync quality metric
 }
 ```
 
@@ -217,7 +260,7 @@ interface WSJTXMessage {
 
 ```typescript
 interface EncodeResult {
-    audioData: Float32Array;  // Generated audio waveform
+    audioData: Float32Array;  // Generated audio waveform (48kHz sample rate)
     messageSent: string;      // Actual message encoded
 }
 ```
@@ -242,51 +285,90 @@ interface WSPRResult {
 
 ## Examples
 
-### Basic FT8 Encoding and Decoding
+### Complete FT8 Encode-Decode Cycle
 
 ```typescript
 import { WSJTXLib, WSJTXMode } from 'wsjtx-lib';
+import * as fs from 'fs';
+import * as wav from 'wav';
 
-const lib = new WSJTXLib();
+async function ft8Example() {
+    const lib = new WSJTXLib();
+    const message = 'CQ DX BH1ABC OM88';
+    const audioFrequency = 1000;
+    
+    // 1. Encode message
+    const encodeResult = await lib.encode(WSJTXMode.FT8, message, audioFrequency);
+    console.log(`Encoded: "${encodeResult.messageSent}"`);
+    
+    // 2. Save as WAV file
+    const audioInt16 = new Int16Array(encodeResult.audioData.length);
+    for (let i = 0; i < encodeResult.audioData.length; i++) {
+        audioInt16[i] = Math.round(encodeResult.audioData[i] * 32767);
+    }
+    
+    const writer = new wav.FileWriter('ft8_test.wav', {
+        channels: 1,
+        sampleRate: lib.getSampleRate(WSJTXMode.FT8),
+        bitDepth: 16
+    });
+    
+    const buffer = Buffer.from(audioInt16.buffer);
+    writer.write(buffer);
+    writer.end();
+    
+    // 3. Read back and decode
+    // Note: For optimal decode, you may need resampling
+    const resampled = resampleTo12kHz(encodeResult.audioData);
+    const audioForDecode = new Int16Array(resampled.length);
+    for (let i = 0; i < resampled.length; i++) {
+        audioForDecode[i] = Math.round(resampled[i] * 32767);
+    }
+    
+    lib.pullMessages(); // Clear queue
+    const decodeResult = await lib.decode(WSJTXMode.FT8, audioForDecode, audioFrequency);
+    
+    const messages = lib.pullMessages();
+    console.log(`Decoded ${messages.length} messages`);
+}
 
-// Encode a message
-const result = await lib.encode(WSJTXMode.FT8, 'CQ DX K1ABC FN20', 1500);
-console.log(`Audio samples: ${result.audioData.length}`);
-
-// Decode audio (replace with actual audio data)
-const audioData = new Float32Array(48000 * 13);
-const decodeResult = await lib.decode(WSJTXMode.FT8, audioData, 1500);
-
-// Get messages
-const messages = lib.pullMessages();
-console.log(`Found ${messages.length} messages`);
+// Helper function for resampling (48kHz -> 12kHz)
+function resampleTo12kHz(audioData48k: Float32Array): Float32Array {
+    const audioData12k = new Float32Array(Math.floor(audioData48k.length / 4));
+    for (let i = 0; i < audioData12k.length; i++) {
+        audioData12k[i] = audioData48k[i * 4];
+    }
+    return audioData12k;
+}
 ```
-
-> **Important Note**: The `frequency` parameter is the **audio base frequency** (typically 500-3000 Hz), not the RF frequency. For example, if you're operating on 20m FT8 (14.074 MHz RF), you might use 1500 Hz as the audio frequency within your transceiver's passband.
 
 ### WSPR Decoding
 
 ```typescript
 import { WSJTXLib } from 'wsjtx-lib';
 
-const lib = new WSJTXLib();
-
-// IQ data (interleaved I,Q samples)
-const iqData = new Float32Array(2 * 12000 * 120); // 2 minutes
-// ... fill with actual IQ data ...
-
-const options = {
-    dialFrequency: 14095600,  // RF dial frequency for WSPR (this is different from audio frequency)
-    callsign: 'K1ABC',
-    locator: 'FN20',
-    quickMode: false,
-    passes: 2
-};
-
-const results = await lib.decodeWSPR(iqData, options);
-results.forEach(result => {
-    console.log(`${result.callsign} ${result.locator} ${result.power}dBm`);
-});
+async function wsprExample() {
+    const lib = new WSJTXLib();
+    
+    // IQ data (interleaved I,Q samples)
+    const iqData = new Float32Array(2 * 12000 * 120); // 2 minutes of IQ data
+    // ... fill with actual IQ data from SDR ...
+    
+    const options = {
+        dialFrequency: 14095600,  // 20m WSPR frequency
+        callsign: 'BH1ABC',
+        locator: 'OM88',
+        quickMode: false,
+        passes: 2
+    };
+    
+    const results = await lib.decodeWSPR(iqData, options);
+    
+    console.log('WSPR Decode Results:');
+    results.forEach(result => {
+        console.log(`${result.callsign} ${result.locator} ${result.power}dBm (SNR: ${result.snr}dB)`);
+    });
+}
 ```
 
 ### Audio Format Conversion
@@ -295,11 +377,37 @@ results.forEach(result => {
 import { WSJTXLib } from 'wsjtx-lib';
 
 // Convert Float32Array to Int16Array
-const floatData = new Float32Array([0.5, -0.5, 0.25]);
+const floatData = new Float32Array([0.5, -0.5, 0.25, -0.25]);
 const intData = WSJTXLib.convertAudioFormat(floatData, 'int16');
+console.log(intData); // Int16Array [16384, -16384, 8192, -8192]
 
 // Convert back to Float32Array
 const backToFloat = WSJTXLib.convertAudioFormat(intData, 'float32');
+console.log(backToFloat); // Float32Array [0.5, -0.5, 0.25, -0.25] (approximately)
+```
+
+### Multiple Message Types
+
+```typescript
+import { WSJTXLib, WSJTXMode } from 'wsjtx-lib';
+
+async function multipleMessages() {
+    const lib = new WSJTXLib();
+    const audioFrequency = 1000;
+    
+    const messages = [
+        'CQ DX BH1ABC OM88',      // CQ call
+        'BH1ABC BH2DEF +05',      // Signal report
+        'BH2DEF BH1ABC R-12',     // Report acknowledgment
+        'BH1ABC BH2DEF RRR',      // Received acknowledgment
+        'BH2DEF BH1ABC 73'        // End contact
+    ];
+    
+    for (const message of messages) {
+        const result = await lib.encode(WSJTXMode.FT8, message, audioFrequency);
+        console.log(`"${message}" -> "${result.messageSent}" (${result.audioData.length} samples)`);
+    }
+}
 ```
 
 ## Error Handling
@@ -310,22 +418,44 @@ The library throws `WSJTXError` for all operation failures:
 import { WSJTXError } from 'wsjtx-lib';
 
 try {
-    await lib.decode(WSJTXMode.FT8, audioData, 1500);
+    await lib.decode(WSJTXMode.FT8, audioData, 1000);
 } catch (error) {
     if (error instanceof WSJTXError) {
         console.error(`WSJTX Error [${error.code}]: ${error.message}`);
+        
+        // Common error codes:
+        // - INVALID_MODE: Invalid mode parameter
+        // - INVALID_FREQUENCY: Invalid frequency parameter
+        // - INVALID_AUDIO_DATA: Invalid audio data format/size
+        // - INVALID_MESSAGE: Invalid message text
+        // - DECODE_ERROR: Decoding operation failed
+        // - ENCODE_ERROR: Encoding operation failed
     } else {
         console.error('Unexpected error:', error);
     }
 }
 ```
 
-## Building from Source
+## Important Notes
+
+1. **Audio Frequency**: The `frequency` parameter is the audio tone frequency within your audio passband (typically 500-3000 Hz), not the RF frequency.
+
+2. **Sample Rates**: Different modes require different sample rates. Use `lib.getSampleRate(mode)` to get the correct rate.
+
+3. **Audio Resampling**: For optimal FT8 decoding, audio may need to be resampled from 48kHz to 12kHz. See examples for implementation.
+
+4. **Thread Safety**: Each WSJTXLib instance should be used from a single thread. Create separate instances for concurrent operations.
+
+5. **Message Queue**: The `pullMessages()` method clears the internal message queue. Call it regularly to avoid memory buildup.
+
+## Building from Source (Advanced)
+
+For detailed build instructions when prebuilt binaries are not available, see [BUILD.md](BUILD.md).
 
 ```bash
 # Clone with submodules
-git clone --recursive https://github.com/your-repo/wsjtx-lib-nodejs.git
-cd wsjtx-lib-nodejs
+git clone --recursive https://github.com/boybook/wsjtx_lib_nodejs.git
+cd wsjtx_lib_nodejs
 
 # Install dependencies
 npm install
@@ -336,8 +466,11 @@ npm run build
 # Run tests
 npm test
 
-# Run example
-node examples/basic_usage.js
+# Run comprehensive tests
+npm run test:full
+
+# Run examples
+node examples/examples.js
 ```
 
 ## Development
@@ -345,13 +478,14 @@ node examples/basic_usage.js
 ### Project Structure
 
 ```
-wsjtx-lib-nodejs/
+wsjtx_lib_nodejs/
 ├── src/                 # TypeScript source files
 ├── native/              # C++ wrapper code
-├── wsjtx_lib/          # Git submodule (wsjtx_lib C library)
+├── wsjtx_lib/          # Git submodule (wsjtx_lib library)
 ├── test/               # Test files
 ├── examples/           # Usage examples
 ├── dist/               # Compiled TypeScript output
+├── prebuilds/          # Prebuilt binaries for distribution
 └── build/              # CMake build directory
 ```
 
@@ -360,8 +494,10 @@ wsjtx-lib-nodejs/
 - `npm run build` - Build both native module and TypeScript
 - `npm run build:native` - Build only the native C++ module
 - `npm run build:ts` - Build only TypeScript
-- `npm test` - Run all tests
+- `npm test` - Run basic tests (CI-friendly)
+- `npm run test:full` - Run comprehensive tests
 - `npm run clean` - Clean build artifacts
+- `npm run package` - Package prebuilt binaries for distribution
 
 ## Contributing
 
@@ -374,17 +510,10 @@ wsjtx-lib-nodejs/
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+This project is licensed under the GPL-3.0 License - see the [LICENSE](LICENSE) file for details.
 
 ## Acknowledgments
 
-- Based on the excellent [wsjtx_lib](https://github.com/original-repo/wsjtx_lib) C library
-- WSJT-X development team for the original algorithms
+- Based on the excellent [wsjtx_lib](https://github.com/paulh002/wsjtx_lib) library by PA0PHH
+- WSJT-X development team for the original algorithms by K1JT
 - Amateur radio community for protocol specifications
-
-## Support
-
-- 📧 Email: support@example.com
-- 🐛 Issues: [GitHub Issues](https://github.com/your-repo/wsjtx-lib-nodejs/issues)
-- 📖 Documentation: [Wiki](https://github.com/your-repo/wsjtx-lib-nodejs/wiki)
-- 💬 Discussions: [GitHub Discussions](https://github.com/your-repo/wsjtx-lib-nodejs/discussions) 

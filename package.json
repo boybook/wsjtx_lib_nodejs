@@ -29,7 +29,7 @@
   "scripts": {
     "prebuild": "prebuild-install",
     "build": "npm run build:native && npm run build:ts",
-    "build:dev": "npm run build:native && npm run build:ts",
+    "build:win": "npm run build:native:win && npm run build:ts",
     "build:native": "cmake-js compile",
     "build:native:win": "cmake-js compile --generator=\"MinGW Makefiles\"",
     "build:ts": "tsc",
