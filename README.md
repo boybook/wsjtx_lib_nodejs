@@ -1,5 +1,7 @@
 # WSJTX Library for Node.js
 
+[![npm version](https://badge.fury.io/js/wsjtx-lib.svg)](https://badge.fury.io/js/wsjtx-lib)
+
 A high-performance Node.js C++ extension for digital amateur radio protocols, providing TypeScript support and async/await interfaces for WSJTX library functionality.
 
 ## Features
