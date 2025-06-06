@@ -24,6 +24,12 @@ jobs:
             node_arch: x64
             cmake_arch: x86_64
           
+          # Linux ARM64 builds (native)
+          - os: ubuntu-24.04-arm
+            arch: arm64
+            node_arch: arm64
+            cmake_arch: arm64
+          
           # macOS builds
           - os: macos-latest
             arch: arm64
@@ -64,25 +70,6 @@ jobs:
             libfftw3-dev \
             libboost-all-dev \
             pkg-config
-
-      # 3a. Linux ARM64 交叉编译设置
-      - name: Setup Linux ARM64 cross-compilation
-        if: runner.os == 'Linux' && matrix.arch == 'arm64'
-        run: |
-          sudo apt-get install -y \
-            gcc-aarch64-linux-gnu \
-            g++-aarch64-linux-gnu \
-            gfortran-aarch64-linux-gnu
-          # 添加 ARM64 架构支持
-          sudo dpkg --add-architecture arm64
-          sudo apt-get update
-          sudo apt-get install -y \
-            libfftw3-dev:arm64 \
-            libboost-all-dev:arm64
-          # 设置交叉编译环境变量
-          echo "CC=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
-          echo "CXX=aarch64-linux-gnu-g++" >> $GITHUB_ENV
-          echo "FC=aarch64-linux-gnu-gfortran" >> $GITHUB_ENV
 
       # 3. 安装系统依赖 - macOS
       - name: Install macOS dependencies
@@ -209,18 +196,8 @@ jobs:
           # 清理可能存在的CMake缓存
           rm -rf build/
           
-          if [ "${{ matrix.arch }}" = "arm64" ] && [ "${{ runner.os }}" = "Linux" ]; then
-            # Linux ARM64 交叉编译
-            npx cmake-js compile --arch=${{ matrix.cmake_arch }} \
-              --CDCMAKE_SYSTEM_NAME=Linux \
-              --CDCMAKE_SYSTEM_PROCESSOR=aarch64 \
-              --CDCMAKE_C_COMPILER=aarch64-linux-gnu-gcc \
-              --CDCMAKE_CXX_COMPILER=aarch64-linux-gnu-g++ \
-              --CDCMAKE_Fortran_COMPILER=aarch64-linux-gnu-gfortran
-          else
-            # 本地编译
-            npx cmake-js compile --arch=${{ matrix.cmake_arch }}
-          fi
+          # 原生编译（支持所有架构）
+          npx cmake-js compile --arch=${{ matrix.cmake_arch }}
 
       # 8. 构建原生模块 - Windows MSYS2/MinGW-w64 (基于 build_mingw.sh)
       - name: Build native module (Windows MSYS2)
@@ -668,7 +645,7 @@ jobs:
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: prebuilt-${{ matrix.os }}-${{ matrix.arch }}
+          name: prebuilt-${{ matrix.os == 'ubuntu-24.04-arm' && 'linux' || (matrix.os == 'ubuntu-latest' && 'linux' || (matrix.os == 'macos-latest' && 'darwin' || 'win32')) }}-${{ matrix.arch }}
           path: prebuilds/
           retention-days: 30
           if-no-files-found: error
@@ -678,7 +655,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: build-debug-${{ matrix.os }}-${{ matrix.arch }}
+          name: build-debug-${{ matrix.os == 'ubuntu-24.04-arm' && 'linux' || (matrix.os == 'ubuntu-latest' && 'linux' || (matrix.os == 'macos-latest' && 'darwin' || 'win32')) }}-${{ matrix.arch }}
           path: |
             build/
             CMakeCache.txt
@@ -703,12 +680,22 @@ jobs:
           mkdir -p final-prebuilds
           
           # 合并所有预构建文件
+          echo "📁 可用的构建产物目录:"
+          ls -la all-artifacts/ || echo "No artifacts directory"
+          
           for artifact_dir in all-artifacts/prebuilt-*; do
             if [ -d "$artifact_dir" ]; then
-              echo "处理 $artifact_dir"
+              echo "📦 处理 $artifact_dir"
+              # 显示目录内容以便调试
+              echo "   内容:"
+              ls -la "$artifact_dir"
               cp -r "$artifact_dir"/* final-prebuilds/
             fi
           done
+          
+          echo ""
+          echo "📋 合并后的final-prebuilds目录结构:"
+          find final-prebuilds -type f | sort
           
           # 显示最终结果
           echo "所有平台的构建产物:"
