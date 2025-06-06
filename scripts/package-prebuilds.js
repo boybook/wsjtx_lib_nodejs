@@ -13,6 +13,7 @@ import path from 'path';
 const PREBUILDS_DIR = 'prebuilds';
 const SUPPORTED_PLATFORMS = [
   { platform: 'linux', arch: 'x64' },
+  { platform: 'linux', arch: 'arm64' },
   { platform: 'darwin', arch: 'arm64' },
   { platform: 'win32', arch: 'x64' }
 ];
