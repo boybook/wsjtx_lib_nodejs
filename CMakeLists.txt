@@ -361,6 +361,24 @@ set_target_properties(${PROJECT_NAME} PROPERTIES
     POSITION_INDEPENDENT_CODE ON
 )
 
+# Ensure output goes to build/Release across generators and platforms
+set(_OUTPUT_DIR "${CMAKE_BINARY_DIR}/Release")
+set_target_properties(${PROJECT_NAME} PROPERTIES
+    LIBRARY_OUTPUT_DIRECTORY "${_OUTPUT_DIR}"
+    RUNTIME_OUTPUT_DIRECTORY "${_OUTPUT_DIR}"
+    ARCHIVE_OUTPUT_DIRECTORY "${_OUTPUT_DIR}"
+)
+
+# Also set configuration-specific output directories for multi-config generators
+foreach(cfg Debug Release RelWithDebInfo MinSizeRel)
+    string(TOUPPER ${cfg} CFG_UPPER)
+    set_target_properties(${PROJECT_NAME} PROPERTIES
+        LIBRARY_OUTPUT_DIRECTORY_${CFG_UPPER} "${CMAKE_BINARY_DIR}/${cfg}"
+        RUNTIME_OUTPUT_DIRECTORY_${CFG_UPPER} "${CMAKE_BINARY_DIR}/${cfg}"
+        ARCHIVE_OUTPUT_DIRECTORY_${CFG_UPPER} "${CMAKE_BINARY_DIR}/${cfg}"
+    )
+endforeach()
+
 # 设置 Node.js 和 node-addon-api 头文件路径（仅针对 C++ 目标）
 if(WIN32 AND CMAKE_CXX_COMPILER_ID MATCHES "GNU")
     # Windows MinGW: 使用 MSYS2 的 Node.js 头文件 + 项目的 node-addon-api

@@ -301,20 +301,20 @@ jobs:
           if [ -f "dist/test/wsjtx.basic.test.js" ]; then
             echo "✅ Basic test file found: dist/test/wsjtx.basic.test.js"
             
-            # 检查原生模块是否存在
-            if [ -f "build/wsjtx_lib_nodejs.node" ]; then
-              echo "✅ Native module found: build/wsjtx_lib_nodejs.node"
-              ls -la build/wsjtx_lib_nodejs.node
-              
-              # 检查模块依赖
-              echo "🔍 Checking module dependencies..."
-              if command -v ldd >/dev/null 2>&1; then
-                ldd build/wsjtx_lib_nodejs.node || echo "ldd failed, trying objdump"
-              fi
-              
-              echo ""
-              echo "🔍 Checking DLL dependencies with objdump:"
-              objdump -p build/wsjtx_lib_nodejs.node | grep "DLL Name" || echo "objdump failed"
+          # 检查原生模块是否存在（统一要求 build/Release）
+          if [ -f "build/Release/wsjtx_lib_nodejs.node" ]; then
+            echo "✅ Native module found: build/Release/wsjtx_lib_nodejs.node"
+            ls -la build/Release/wsjtx_lib_nodejs.node
+
+            # 检查模块依赖
+            echo "🔍 Checking module dependencies..."
+            if command -v ldd >/dev/null 2>&1; then
+              ldd build/Release/wsjtx_lib_nodejs.node || echo "ldd failed, trying objdump"
+            fi
+            
+            echo ""
+            echo "🔍 Checking DLL dependencies with objdump:"
+            objdump -p build/Release/wsjtx_lib_nodejs.node | grep "DLL Name" || echo "objdump failed"
               
               # 检查关键库是否在PATH中可用
               echo ""
@@ -371,8 +371,6 @@ jobs:
               # 运行测试
               echo ""
               echo "🧪 Running tests with version-matched Node.js..."
-              
-              # 运行测试
               npm test
               test_result=$?
               
@@ -383,22 +381,11 @@ jobs:
                 
                 # 尝试直接加载模块
                 echo "🔍 Trying to load module directly..."
-                node -e "try { require('./build/wsjtx_lib_nodejs.node'); console.log('✅ Module loaded successfully'); } catch(e) { console.error('❌ Load error:', e.message); console.error('   Code:', e.code); }"
+                node -e "try { require('./build/Release/wsjtx_lib_nodejs.node'); console.log('✅ Module loaded successfully'); } catch(e) { console.error('❌ Load error:', e.message); console.error('   Code:', e.code); }"
                 
                 exit $test_result
               fi
               
-            elif [ -f "build/Release/wsjtx_lib_nodejs.node" ]; then
-              echo "✅ Native module found: build/Release/wsjtx_lib_nodejs.node"
-              ls -la build/Release/wsjtx_lib_nodejs.node
-              
-              # 运行基础测试
-              echo "🧪 Running npm test..."
-              npm test
-              if [ $? -ne 0 ]; then
-                echo "❌ Test failed"
-                exit 1
-              fi
             else
               echo "❌ Native module not found! Searching for .node files..."
               find . -name "*.node" -type f || echo "No .node files found"
@@ -431,17 +418,15 @@ jobs:
           echo "   • Architecture: ${{ matrix.arch }}"
           mkdir -p "$TARGET_DIR"
           
-          # 复制构建的 .node 文件 - 检查两个可能的位置
+          # 复制构建的 .node 文件（统一来自 build/Release）
           if [ -f "build/Release/wsjtx_lib_nodejs.node" ]; then
             cp build/Release/wsjtx_lib_nodejs.node "$TARGET_DIR/"
             echo "Copied from build/Release/"
             NODE_FILE="build/Release/wsjtx_lib_nodejs.node"
-          elif [ -f "build/wsjtx_lib_nodejs.node" ]; then
-            cp build/wsjtx_lib_nodejs.node "$TARGET_DIR/"
-            echo "Copied from build/"
-            NODE_FILE="build/wsjtx_lib_nodejs.node"
           else
-            echo "❌ Native module not found for packaging!"
+            echo "❌ Native module not found for packaging at build/Release!"
+            echo "当前 build 目录结构："
+            find build -maxdepth 2 -type f -name "*.node" -print || true
             exit 1
           fi
           
