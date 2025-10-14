@@ -121,9 +121,9 @@ describe('WSJTX Library Basic Tests', () => {
   });
 
   describe('Audio Format Conversion Tests', () => {
-    it('should convert Float32Array to Int16Array', () => {
+    it('should convert Float32Array to Int16Array', async () => {
       const floatData = new Float32Array([0.0, 0.5, -0.5, 1.0, -1.0]);
-      const intData = WSJTXLib.convertAudioFormat(floatData, 'int16') as Int16Array;
+      const intData = await lib.convertAudioFormat(floatData, 'int16') as Int16Array;
 
       assert.ok(intData instanceof Int16Array);
       assert.strictEqual(intData.length, floatData.length);
@@ -134,9 +134,9 @@ describe('WSJTX Library Basic Tests', () => {
       assert.ok(Math.abs(intData[4] + 32767) < 10);
     });
 
-    it('should convert Int16Array to Float32Array', () => {
+    it('should convert Int16Array to Float32Array', async () => {
       const intData = new Int16Array([0, 16384, -16384, 32767, -32767]);
-      const floatData = WSJTXLib.convertAudioFormat(intData, 'float32') as Float32Array;
+      const floatData = await lib.convertAudioFormat(intData, 'float32') as Float32Array;
 
       assert.ok(floatData instanceof Float32Array);
       assert.strictEqual(floatData.length, intData.length);
@@ -147,26 +147,26 @@ describe('WSJTX Library Basic Tests', () => {
       assert.ok(Math.abs(floatData[4] + 1.0) < 0.001);
     });
 
-    it('should handle edge cases in conversion', () => {
+    it('should handle edge cases in conversion', async () => {
       // Test empty arrays
       const emptyFloat = new Float32Array(0);
-      const emptyInt = WSJTXLib.convertAudioFormat(emptyFloat, 'int16') as Int16Array;
+      const emptyInt = await lib.convertAudioFormat(emptyFloat, 'int16') as Int16Array;
       assert.strictEqual(emptyInt.length, 0);
 
       const emptyInt16 = new Int16Array(0);
-      const emptyFloat32 = WSJTXLib.convertAudioFormat(emptyInt16, 'float32') as Float32Array;
+      const emptyFloat32 = await lib.convertAudioFormat(emptyInt16, 'float32') as Float32Array;
       assert.strictEqual(emptyFloat32.length, 0);
     });
 
-    it('should maintain precision in round-trip conversion', () => {
+    it('should maintain precision in round-trip conversion', async () => {
       const originalData = new Float32Array(1000);
       for (let i = 0; i < originalData.length; i++) {
         originalData[i] = (Math.random() - 0.5) * 2; // Range -1 to 1
       }
 
       // Convert to Int16Array and back
-      const intData = WSJTXLib.convertAudioFormat(originalData, 'int16') as Int16Array;
-      const convertedData = WSJTXLib.convertAudioFormat(intData, 'float32') as Float32Array;
+      const intData = await lib.convertAudioFormat(originalData, 'int16') as Int16Array;
+      const convertedData = await lib.convertAudioFormat(intData, 'float32') as Float32Array;
 
       // Check precision
       let maxError = 0;
@@ -179,11 +179,9 @@ describe('WSJTX Library Basic Tests', () => {
       assert.ok(maxError < 0.001);
     });
 
-    it('should handle invalid format parameter', () => {
+    it('should handle invalid format parameter', async () => {
       const floatData = new Float32Array([0.5]);
-      assert.throws(() => {
-        WSJTXLib.convertAudioFormat(floatData, 'invalid' as any);
-      });
+      await assert.rejects(() => lib.convertAudioFormat(floatData, 'invalid' as any));
     });
   });
 

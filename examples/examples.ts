@@ -244,7 +244,7 @@ async function exampleFT8Encoding() {
  * Example 3: Audio Format Conversion
  * Demonstrates conversion between Float32Array and Int16Array
  */
-function exampleAudioConversion() {
+async function exampleAudioConversion() {
   console.log('\n🔄 === Audio Format Conversion Example ===');
   
   // Create test audio data (sine wave)
@@ -275,8 +275,9 @@ function exampleAudioConversion() {
   }
   console.log(`  Amplitude range: ${minVal.toFixed(4)} to ${maxVal.toFixed(4)}`);
   
-  // Convert to Int16Array
-  const intData = WSJTXLib.convertAudioFormat(floatData, 'int16') as Int16Array;
+  const lib = new WSJTXLib();
+  // Convert to Int16Array (async)
+  const intData = await lib.convertAudioFormat(floatData, 'int16') as Int16Array;
   console.log(`\nConverted to Int16Array:`);
   console.log(`  Sample count: ${intData.length}`);
   console.log(`  Data type: ${intData.constructor.name}`);
@@ -291,8 +292,8 @@ function exampleAudioConversion() {
   }
   console.log(`  Amplitude range: ${minIntVal} to ${maxIntVal}`);
   
-  // Convert back to Float32Array
-  const floatData2 = WSJTXLib.convertAudioFormat(intData, 'float32') as Float32Array;
+  // Convert back to Float32Array (async)
+  const floatData2 = await lib.convertAudioFormat(intData, 'float32') as Float32Array;
   console.log(`\nConverted back to Float32Array:`);
   console.log(`  Sample count: ${floatData2.length}`);
   console.log(`  Data type: ${floatData2.constructor.name}`);

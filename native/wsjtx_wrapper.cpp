@@ -5,6 +5,8 @@
 #include <memory>
 #include <string>
 #include <vector>
+#include <algorithm>
+#include <cmath>
 
 namespace wsjtx_nodejs
 {
@@ -32,10 +34,70 @@ namespace wsjtx_nodejs
     // WSJTXLibWrapper implementation
     Napi::Object WSJTXLibWrapper::Init(Napi::Env env, Napi::Object exports)
     {
-        Napi::Function func = DefineClass(env, "WSJTXLib", {InstanceMethod("decode", &WSJTXLibWrapper::Decode), InstanceMethod("encode", &WSJTXLibWrapper::Encode), InstanceMethod("decodeWSPR", &WSJTXLibWrapper::DecodeWSPR), InstanceMethod("pullMessages", &WSJTXLibWrapper::PullMessages), InstanceMethod("isEncodingSupported", &WSJTXLibWrapper::IsEncodingSupported), InstanceMethod("isDecodingSupported", &WSJTXLibWrapper::IsDecodingSupported), InstanceMethod("getSampleRate", &WSJTXLibWrapper::GetSampleRate), InstanceMethod("getTransmissionDuration", &WSJTXLibWrapper::GetTransmissionDuration)});
+        Napi::Function func = DefineClass(env, "WSJTXLib", {
+            InstanceMethod("decode", &WSJTXLibWrapper::Decode),
+            InstanceMethod("encode", &WSJTXLibWrapper::Encode),
+            InstanceMethod("decodeWSPR", &WSJTXLibWrapper::DecodeWSPR),
+            InstanceMethod("pullMessages", &WSJTXLibWrapper::PullMessages),
+            InstanceMethod("isEncodingSupported", &WSJTXLibWrapper::IsEncodingSupported),
+            InstanceMethod("isDecodingSupported", &WSJTXLibWrapper::IsDecodingSupported),
+            InstanceMethod("getSampleRate", &WSJTXLibWrapper::GetSampleRate),
+            InstanceMethod("getTransmissionDuration", &WSJTXLibWrapper::GetTransmissionDuration),
+            InstanceMethod("convertAudioFormat", &WSJTXLibWrapper::ConvertAudioFormat)
+        });
 
         exports.Set("WSJTXLib", func);
         return exports;
+    }
+
+    // New method: convertAudioFormat(audioData, targetFormat, callback)
+    Napi::Value WSJTXLibWrapper::ConvertAudioFormat(const Napi::CallbackInfo& info)
+    {
+        Napi::Env env = info.Env();
+
+        if (info.Length() < 3)
+        {
+            Napi::TypeError::New(env, "Expected 3 arguments: audioData, targetFormat, callback").ThrowAsJavaScriptException();
+            return env.Null();
+        }
+
+        if (!info[0].IsTypedArray() || !info[1].IsString() || !info[2].IsFunction())
+        {
+            Napi::TypeError::New(env, "Invalid argument types").ThrowAsJavaScriptException();
+            return env.Null();
+        }
+
+        std::string target = info[1].As<Napi::String>().Utf8Value();
+        AudioConvertWorker::Target tgt;
+        if (target == "float32") tgt = AudioConvertWorker::Target::Float32;
+        else if (target == "int16") tgt = AudioConvertWorker::Target::Int16;
+        else {
+            Napi::TypeError::New(env, "targetFormat must be 'float32' or 'int16'").ThrowAsJavaScriptException();
+            return env.Null();
+        }
+
+        Napi::Function callback = info[2].As<Napi::Function>();
+
+        Napi::TypedArray ta = info[0].As<Napi::TypedArray>();
+        if (ta.TypedArrayType() == napi_float32_array)
+        {
+            auto input = ConvertToFloatArray(env, info[0]);
+            auto* worker = new AudioConvertWorker(callback, input, tgt);
+            worker->Queue();
+        }
+        else if (ta.TypedArrayType() == napi_int16_array)
+        {
+            auto input = ConvertToIntArray(env, info[0]);
+            auto* worker = new AudioConvertWorker(callback, input, tgt);
+            worker->Queue();
+        }
+        else
+        {
+            Napi::TypeError::New(env, "audioData must be Float32Array or Int16Array").ThrowAsJavaScriptException();
+            return env.Null();
+        }
+
+        return env.Undefined();
     }
 
     WSJTXLibWrapper::WSJTXLibWrapper(const Napi::CallbackInfo &info)
@@ -564,6 +626,64 @@ namespace wsjtx_nodejs
         }
 
         Callback().Call({env.Null(), resultsArray});
+    }
+
+    // AudioConvertWorker implementation
+    void AudioConvertWorker::Execute()
+    {
+        if (fromFloat_)
+        {
+            if (target_ == Target::Float32)
+            {
+                // No-op copy
+                floatOut_ = floatInput_;
+            }
+            else
+            {
+                intOut_.resize(floatInput_.size());
+                for (size_t i = 0; i < floatInput_.size(); ++i)
+                {
+                    float v = floatInput_[i];
+                    // Clamp then scale
+                    if (v > 1.0f) v = 1.0f;
+                    else if (v < -1.0f) v = -1.0f;
+                    intOut_[i] = static_cast<short int>(std::max(-32768, std::min(32767, static_cast<int>(std::lround(v * 32768.0f)))));
+                }
+            }
+        }
+        else
+        {
+            if (target_ == Target::Int16)
+            {
+                // No-op copy
+                intOut_ = intInput_;
+            }
+            else
+            {
+                floatOut_.resize(intInput_.size());
+                for (size_t i = 0; i < intInput_.size(); ++i)
+                {
+                    floatOut_[i] = static_cast<float>(intInput_[i]) / 32768.0f;
+                }
+            }
+        }
+    }
+
+    void AudioConvertWorker::OnOK()
+    {
+        Napi::Env env = Env();
+        if (target_ == Target::Float32)
+        {
+            Napi::Float32Array out = Napi::Float32Array::New(env, floatOut_.size());
+            std::copy(floatOut_.begin(), floatOut_.end(), out.Data());
+            Callback().Call({ env.Null(), out });
+        }
+        else
+        {
+            Napi::Int16Array out = Napi::Int16Array::New(env, intOut_.size());
+            std::copy(intOut_.begin(), intOut_.end(), out.Data());
+            Callback().Call({ env.Null(), out });
+        }
     }
 
     // Module initialization

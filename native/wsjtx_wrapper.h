@@ -32,6 +32,7 @@ private:
     Napi::Value IsDecodingSupported(const Napi::CallbackInfo& info);
     Napi::Value GetSampleRate(const Napi::CallbackInfo& info);
     Napi::Value GetTransmissionDuration(const Napi::CallbackInfo& info);
+    Napi::Value ConvertAudioFormat(const Napi::CallbackInfo& info);
 
     // Internal helper methods
     Napi::Object CreateWSJTXMessage(Napi::Env env, const WsjtxMessage& msg);
@@ -149,6 +150,40 @@ private:
     std::vector<std::complex<float>> iqData_;
     decoder_options options_;
     std::vector<decoder_results> results_;
+};
+
+/**
+ * Async worker for simple audio format conversion
+ */
+class AudioConvertWorker : public Napi::AsyncWorker {
+public:
+    enum class Target { Float32, Int16 };
+
+    // From Float32Array to Int16Array
+    AudioConvertWorker(Napi::Function& callback,
+                       const std::vector<float>& input,
+                       Target target)
+        : Napi::AsyncWorker(callback), floatInput_(input), target_(target), fromFloat_(true) {}
+
+    // From Int16Array to Float32Array
+    AudioConvertWorker(Napi::Function& callback,
+                       const std::vector<short int>& input,
+                       Target target)
+        : Napi::AsyncWorker(callback), intInput_(input), target_(target), fromFloat_(false) {}
+
+    ~AudioConvertWorker() = default;
+
+protected:
+    void Execute() override;
+    void OnOK() override;
+
+private:
+    std::vector<float> floatInput_;
+    std::vector<short int> intInput_;
+    std::vector<float> floatOut_;
+    std::vector<short int> intOut_;
+    Target target_;
+    bool fromFloat_;
 };
 
 // Module initialization functions

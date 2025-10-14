@@ -401,41 +401,44 @@ export class WSJTXLib {
   }
 
   /**
-   * Convert audio format between Float32Array and Int16Array
+   * Convert audio format between Float32Array and Int16Array (async)
    * 
-   * @param audioData Input audio data
-   * @param targetFormat Target format ('float32' or 'int16')
-   * @returns Converted audio data
+   * Uses the native addon with Node's libuv 线程池执行，不阻塞主线程。
+   * 
+   * @param audioData 输入音频数据
+   * @param targetFormat 目标格式 ('float32' | 'int16')
+   * @returns Promise 解析为转换后的数据
    */
-  static convertAudioFormat(
+  async convertAudioFormat(
     audioData: AudioData,
     targetFormat: 'float32' | 'int16'
-  ): AudioData {
+  ): Promise<AudioData> {
     if (targetFormat !== 'float32' && targetFormat !== 'int16') {
       throw new Error(`Invalid target format: ${targetFormat}. Must be 'float32' or 'int16'`);
     }
 
-    if (targetFormat === 'float32') {
-      if (audioData instanceof Float32Array) {
-        return audioData;
-      }
-      // Convert Int16Array to Float32Array
-      const result = new Float32Array(audioData.length);
-      for (let i = 0; i < audioData.length; i++) {
-        result[i] = audioData[i] / 32768.0;
-      }
-      return result;
-    } else {
-      if (audioData instanceof Int16Array) {
-        return audioData;
-      }
-      // Convert Float32Array to Int16Array
-      const result = new Int16Array(audioData.length);
-      for (let i = 0; i < audioData.length; i++) {
-        result[i] = Math.max(-32768, Math.min(32767, Math.round(audioData[i] * 32768)));
-      }
-      return result;
+    // 快速路径：已经是目标格式
+    if ((targetFormat === 'float32' && audioData instanceof Float32Array) ||
+        (targetFormat === 'int16' && audioData instanceof Int16Array)) {
+      return audioData;
     }
+
+    return new Promise<AudioData>((resolve, reject) => {
+      const callback = (error: Error | null, result?: AudioData) => {
+        if (error) return reject(error);
+        if (!result) return reject(new Error('Audio conversion failed'));
+        resolve(result);
+      };
+
+      try {
+        this.native.convertAudioFormat(audioData, targetFormat, callback);
+      } catch (error) {
+        reject(new WSJTXError(
+          `Audio conversion failed: ${error instanceof Error ? error.message : String(error)}`,
+          'AUDIO_CONVERT_ERROR'
+        ));
+      }
+    });
   }
 
   // Validation methods
