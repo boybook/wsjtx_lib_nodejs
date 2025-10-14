@@ -42,7 +42,6 @@ import {
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
-import fs from 'node:fs';
 
 // Create require function for ES modules
 const require = createRequire(import.meta.url);
@@ -51,60 +50,18 @@ const require = createRequire(import.meta.url);
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Determine the correct path to the native module
-// Priority order:
-// 1. Prebuilt binaries (for npm published packages)
-// 2. Local build output (for development)
-function findNativeModule(): string {
-  const platform = process.platform;
-  const arch = process.arch;
-  
-  // 获取当前模块的根目录（node_modules/wsjtx-lib）
-  const moduleRoot = path.resolve(__dirname, '..', '..');
-  
-  const possiblePaths = [
-    // 1. Prebuilt binaries (npm packages) - highest priority
-    path.join(moduleRoot, 'prebuilds', `${platform}-${arch}`, 'wsjtx_lib_nodejs.node'),
-    
-    // 2. GitHub Actions legacy format (for backward compatibility)
-    path.join(moduleRoot, 'prebuilds', `${platform}-latest-${arch}`, 'wsjtx_lib_nodejs.node'),
-    path.join(moduleRoot, 'prebuilds', `ubuntu-latest-${arch}`, 'wsjtx_lib_nodejs.node'), // Linux
-    path.join(moduleRoot, 'prebuilds', `macos-latest-${arch}`, 'wsjtx_lib_nodejs.node'),  // macOS  
-    path.join(moduleRoot, 'prebuilds', `windows-latest-${arch}`, 'wsjtx_lib_nodejs.node'), // Windows
-    
-    // 3. Local development builds - third priority
-    path.join(moduleRoot, 'build', 'wsjtx_lib_nodejs.node'),
-    path.join(moduleRoot, 'build', 'Release', 'wsjtx_lib_nodejs.node'),
-  ];
-
-  // 添加调试信息
-  console.log('Searching for native module with paths:');
-  possiblePaths.forEach(p => console.log(`  - ${p}`));
-
-  for (const modulePath of possiblePaths) {
-    if (fs.existsSync(modulePath)) {
-      console.log(`Found native module at: ${modulePath}`);
-      return modulePath;
-    }
-  }
-
-  // If no module found, throw a helpful error with all attempted paths
-  const pathList = possiblePaths.map(p => `  - ${p}`).join('\n');
-  throw new Error(
-    `Native module not found for ${platform}-${arch}.\n` +
-    `Searched in:\n${pathList}\n\n` +
-    'Solutions:\n' +
-    '1. If you installed via npm, this may be a missing prebuilt binary\n' +
-    '2. For development, run "npm run build" to compile the native module\n' +
-    '3. Check if your platform/architecture is supported'
-  );
+// Load native module using node-gyp-build (prebuildify layout with build/Release fallback)
+function loadNativeBinding(): { WSJTXLib: any } {
+  const packageRoot = path.resolve(__dirname, '..', '..');
+  const load = require('node-gyp-build');
+  const binding = load(packageRoot);
+  if (binding && binding.WSJTXLib) return binding;
+  throw new Error('Native module loaded but WSJTXLib export is missing. Please rebuild with "npm run build".');
 }
 
-const nativeModulePath = findNativeModule();
-
-// Import the native module (will be built by cmake-js)
+// Import the native module
 // @ts-ignore - Native module types are defined separately
-const { WSJTXLib: NativeWSJTXLib } = require(nativeModulePath);
+const { WSJTXLib: NativeWSJTXLib } = loadNativeBinding();
 
 /**
  * Main WSJTX library class providing digital radio protocol processing

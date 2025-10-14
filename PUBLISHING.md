@@ -1,12 +1,12 @@
 # WSJTX-Lib 发布指南
 
-本文档说明如何发布带有预构建二进制文件的 npm 包。
+本文档说明如何以 prebuildify 风格发布带有预构建二进制的 npm 包，并由 node-gyp-build 在运行时自动查找与加载。
 
 ## 📦 依赖库捆绑策略
 
 ### 为什么需要捆绑依赖库？
 
-我们的Node.js原生模块依赖这些外部库：
+我们的 Node.js 原生模块依赖这些外部库：
 - **FFTW3**: 快速傅里叶变换库
 - **Fortran运行时**: gfortran库
 - **GCC运行时**: libgcc, libstdc++等
@@ -127,41 +127,35 @@ npm publish --tag beta
 
 ## 📋 用户安装体验
 
-### 有预构建包的情况
+### 有预构建包的情况（默认）
 
-用户执行 `npm install wsjtx-lib` 时：
+用户执行 `npm install wsjtx-lib` 后，运行时代码通过 `node-gyp-build` 在以下位置查找：
 
-1. npm检查是否有匹配的预构建包
-2. 如果有，直接使用预构建的`.node`文件和捆绑的依赖库
-3. 安装完成，无需编译
+1. `prebuilds/<platform>-<arch>/*.node`
+2. 回退到 `build/Release/*.node`（本地开发场景）
+
+预构建二进制已随 npm 包内置，安装完成后无需编译与网络下载。
 
 ### 无预构建包的情况
 
-如果用户的平台没有预构建包：
+如果用户的平台没有对应目录（例如非列出的 CPU/OS 组合或 musl/Alpine），运行时将报错并提示已尝试的搜索路径。
 
-1. `prebuild-install`会尝试下载预构建包（失败）
-2. 回退到源码编译模式
-3. 要求用户安装构建依赖（cmake, gcc, gfortran, FFTW3等）
-4. 使用cmake-js进行编译
+此时用户可选择从源码构建：
+
+1. 安装构建依赖（cmake、gfortran、FFTW3、Boost 等）
+2. 执行 `npm run build` 生成 `build/Release/*.node`
+3. 运行时会自动从 `build/Release` 回退加载
 
 ## 🔧 模块加载逻辑
 
-我们的`src/index.ts`中的模块查找逻辑：
+运行时加载逻辑使用 `node-gyp-build`，并带有回退路径：
 
-```typescript
-function findNativeModule(): string {
-  const possiblePaths = [
-    // 预构建包路径
-    path.resolve(__dirname, '..', 'prebuilds', `${process.platform}-${process.arch}`, 'wsjtx_lib_nodejs.node'),
-    // 源码构建路径
-    path.resolve(__dirname, '..', 'build', 'wsjtx_lib_nodejs.node'),
-    path.resolve(__dirname, '..', 'build', 'Release', 'wsjtx_lib_nodejs.node'),
-  ];
-  // ...
-}
+```ts
+const load = require('node-gyp-build');
+const pkgRoot = path.resolve(__dirname, '..', '..');
+const binding = load(pkgRoot); // 优先按 prebuildify 规范加载
+// 若失败，则回退到 prebuilds/<platform>-<arch>/ 与 build/Release 路径
 ```
-
-这确保无论是预构建包还是源码编译，都能正确找到原生模块。
 
 ## 📊 包大小优化
 
@@ -184,6 +178,7 @@ function findNativeModule(): string {
 
 ## 📚 相关工具
 
-- [prebuild-install](https://github.com/prebuild/prebuild-install): 预构建包安装器
-- [cmake-js](https://github.com/cmake-js/cmake-js): Node.js C++编译工具
-- [GitHub Actions](https://github.com/features/actions): 自动化构建 
+- [prebuildify](https://github.com/prebuild/prebuildify): 预构建产物目录规范与工作流
+- [node-gyp-build](https://github.com/prebuild/node-gyp-build): 运行时自动加载预构建二进制
+- [cmake-js](https://github.com/cmake-js/cmake-js): 使用 CMake 构建 Node.js C++ 扩展
+- [GitHub Actions](https://github.com/features/actions): 自动化构建

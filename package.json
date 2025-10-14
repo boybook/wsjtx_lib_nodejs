@@ -1,6 +1,6 @@
 {
   "name": "wsjtx-lib",
-  "version": "1.0.4",
+  "version": "1.1.0",
   "description": "Node.js C++ extension for WSJTX digital radio protocol library",
   "type": "module",
   "main": "dist/src/index.js",
@@ -20,14 +20,7 @@
     "README.md",
     "LICENSE"
   ],
-  "binary": {
-    "module_name": "wsjtx_lib_nodejs",
-    "module_path": "./prebuilds/{platform}-{arch}/",
-    "host": "https://github.com/boybook/wsjtx_lib_nodejs/releases/download/",
-    "remote_path": "v{version}"
-  },
   "scripts": {
-    "prebuild": "prebuild-install",
     "build": "npm run build:native && npm run build:ts",
     "build:win": "npm run build:native:win && npm run build:ts",
     "build:native": "cmake-js compile",
@@ -35,7 +28,7 @@
     "build:ts": "tsc",
     "clean": "cmake-js clean && rimraf dist",
     "test": "node --test dist/test/wsjtx.basic.test.js",
-    "test:full": "npm run build:dev && node --test dist/test/wsjtx.test.js",
+    "test:full": "node --test dist/test/wsjtx.test.js",
     "prepare": "npm run build:ts",
     "package": "node scripts/package-prebuilds.js",
     "prepublishOnly": "npm run build:ts && npm run package"
@@ -63,7 +56,7 @@
   },
   "dependencies": {
     "node-addon-api": "^8.3.1",
-    "prebuild-install": "^7.1.1"
+    "node-gyp-build": "^4.8.0"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",

@@ -39,9 +39,13 @@ npm install wsjtx-lib
 ```
 
 **Supported platforms with prebuilt binaries:**
-- Linux x64
+- Linux x64 / arm64
 - macOS ARM64 (Apple Silicon)
 - Windows x64
+
+Runtime binary loading uses `node-gyp-build` with prebuildify layout
+(`prebuilds/<platform>-<arch>/*.node`), and falls back to
+`build/Release/*.node` for local development builds.
 
 ### Building from Source
 
