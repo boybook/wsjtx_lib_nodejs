@@ -437,18 +437,21 @@ jobs:
           
           if [ "${{ runner.os }}" = "Linux" ]; then
             echo "Checking Linux shared libraries..."
-            mkdir -p "$TARGET_DIR/native"
+            # 将依赖库与 .node 放在同级目录,与 macOS 和 Windows 保持一致
             ldd "$NODE_FILE" | grep -v "linux-vdso\|ld-linux\|libc\|libm\|libpthread\|libdl" | awk '{print $3}' | grep -v "not found" | while read lib; do
               if [ -f "$lib" ] && [[ "$lib" == *"libfftw"* || "$lib" == *"libgfortran"* || "$lib" == *"libgcc"* || "$lib" == *"libquadmath"* || "$lib" == *"libstdc++"* ]]; then
                 lib_name=$(basename "$lib")
-                echo "📦 Bundling: $lib_name -> native/"
-                cp -n "$lib" "$TARGET_DIR/native/" || cp "$lib" "$TARGET_DIR/native/"
+                echo "📦 Bundling: $lib_name -> $TARGET_DIR/"
+                cp -n "$lib" "$TARGET_DIR/" || cp "$lib" "$TARGET_DIR/"
               fi
             done
-            echo "Setting RPATH to include $ORIGIN/native"
-            patchelf --set-rpath '$ORIGIN:$ORIGIN/native' "$NODE_FILE" || true
+            echo "Setting RPATH to \$ORIGIN (same directory as .node)"
+            patchelf --set-rpath '$ORIGIN' "$NODE_FILE" || true
             echo "🔎 ldd after RPATH:"
             ldd "$NODE_FILE" || true
+            echo ""
+            echo "📁 Bundled .so files in $TARGET_DIR:"
+            ls -la "$TARGET_DIR"/*.so* 2>/dev/null || echo "No .so files found"
           elif [ "${{ runner.os }}" = "macOS" ]; then
             echo "Bundling macOS dylibs with dylibbundler..."
             # 优先在 Homebrew 的常见路径搜索
@@ -474,14 +477,14 @@ jobs:
               fi
             done
 
-            # 使用 native 子目录集中依赖；-od 只清空 native，不影响 .node
-            mkdir -p "$TARGET_DIR/native"
-            # 使用 -b 启用实际复制；-od 仅清空 native 子目录，不影响 .node 本体
-            dylibbundler -x "$NODE_FILE" -d "$TARGET_DIR/native" -p "@loader_path/native/" $SP_ARGS -od -b
+            # 将依赖库与 .node 放在同级目录,避免嵌套路径问题
+            # 注意: -od 会清空目标目录,但 .node 已经复制到 TARGET_DIR,dylibbundler 不会删除它
+            # 使用 -b 启用实际复制
+            dylibbundler -x "$NODE_FILE" -d "$TARGET_DIR" -p "@loader_path/" $SP_ARGS -b
 
             echo ""
-            echo "📁 Bundled dylibs:"
-            ls -la "$TARGET_DIR/native" || true
+            echo "📁 Bundled dylibs in $TARGET_DIR:"
+            ls -la "$TARGET_DIR"/*.dylib 2>/dev/null || echo "No dylib files found"
 
             echo ""
             echo "🔎 Final otool -L of packaged .node file ($NODE_FILE):"
