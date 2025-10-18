@@ -436,7 +436,7 @@ jobs:
           if [ "${{ runner.os }}" = "Linux" ]; then
             echo "Checking Linux shared libraries..."
             ldd "$NODE_FILE" | grep -v "linux-vdso\|ld-linux\|libc\|libm\|libpthread\|libdl" | awk '{print $3}' | grep -v "not found" | while read lib; do
-              if [ -f "$lib" ] && [[ "$lib" == *"libfftw"* || "$lib" == *"libgfortran"* || "$lib" == *"libgcc"* ]]; then
+              if [ -f "$lib" ] && [[ "$lib" == *"libfftw"* || "$lib" == *"libgfortran"* || "$lib" == *"libgcc"* || "$lib" == *"libquadmath"* ]]; then
                 lib_name=$(basename "$lib")
                 echo "📦 Bundling: $lib_name"
                 cp "$lib" "$TARGET_DIR/"
@@ -444,13 +444,45 @@ jobs:
             done
           elif [ "${{ runner.os }}" = "macOS" ]; then
             echo "Checking macOS dynamic libraries..."
-            otool -L "$NODE_FILE" | grep -E "(libfftw|libgfortran|libgcc)" | awk '{print $1}' | while read lib; do
+            # 1) 复制需要的依赖（含 libquadmath）
+            otool -L "$NODE_FILE" | grep -E "(libfftw|libgfortran|libgcc|libquadmath)" | awk '{print $1}' | while read lib; do
               if [ -f "$lib" ]; then
                 lib_name=$(basename "$lib")
                 echo "📦 Bundling: $lib_name"
                 cp "$lib" "$TARGET_DIR/"
               fi
             done
+
+            # 2) 将 .node 中依赖路径改为 @loader_path/xxx.dylib，避免指向 Homebrew 绝对路径
+            for dylib in "$TARGET_DIR"/*.dylib; do
+              [ -f "$dylib" ] || continue
+              base=$(basename "$dylib")
+              # 找到原始加载路径并替换
+              otool -L "$NODE_FILE" | awk '{print $1}' | grep "$base" | while read old; do
+                echo "🔧 Rewriting install name in .node: $old -> @loader_path/$base"
+                install_name_tool -change "$old" "@loader_path/$base" "$NODE_FILE"
+              done
+            done
+
+            # 3) 修正被捆绑的 dylib 之间的相互依赖（确保它们彼此也使用 @loader_path）
+            for dylib in "$TARGET_DIR"/*.dylib; do
+              [ -f "$dylib" ] || continue
+              for dep in $(otool -L "$dylib" | awk '{print $1}' | grep -E "(libfftw|libgfortran|libgcc|libquadmath)" || true); do
+                dep_base=$(basename "$dep")
+                if [ -f "$TARGET_DIR/$dep_base" ]; then
+                  echo "🔧 Rewriting install name in $dylib: $dep -> @loader_path/$dep_base"
+                  install_name_tool -change "$dep" "@loader_path/$dep_base" "$dylib"
+                fi
+              done
+              # 同时设置自身的 id 为 @loader_path/<name>
+              id_base=$(basename "$dylib")
+              echo "🔧 Setting install id for $dylib -> @loader_path/$id_base"
+              install_name_tool -id "@loader_path/$id_base" "$dylib"
+            done
+
+            echo ""
+            echo "🔎 Final otool -L of .node:"
+            otool -L "$NODE_FILE"
           fi
           
           # 显示构建结果

@@ -379,6 +379,15 @@ foreach(cfg Debug Release RelWithDebInfo MinSizeRel)
     )
 endforeach()
 
+# On Linux, ensure the module can find bundled .so beside the .node via RPATH
+if(UNIX AND NOT APPLE)
+    # Use $ORIGIN so the loader searches the .node's directory
+    set_target_properties(${PROJECT_NAME} PROPERTIES
+        BUILD_RPATH "\$ORIGIN"
+        INSTALL_RPATH "\$ORIGIN"
+    )
+endif()
+
 # 设置 Node.js 和 node-addon-api 头文件路径（仅针对 C++ 目标）
 if(WIN32 AND CMAKE_CXX_COMPILER_ID MATCHES "GNU")
     # Windows MinGW: 使用 MSYS2 的 Node.js 头文件 + 项目的 node-addon-api
