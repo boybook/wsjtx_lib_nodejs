@@ -93,6 +93,96 @@ CI 集成（简化、可重复）
 
 - macOS 改写依赖会使原签名失效，dylibbundler 会进行 ad-hoc 签名；若集成到 Electron/App，需对最终产物统一签名/公证。
 - Linux 不要尝试捆绑或静态链接 glibc；可考虑 `-static-libstdc++ -static-libgcc` 减少 .so 数量。
-- **所有平台统一采用同级目录方案**，避免嵌套路径导致的 `@loader_path/native/native/` 等问题。
+- **所有平台统一采用同级目录方案**，避免嵌套路径导致的 `@loader_path/native/native/` 等问题（详见下方"常见陷阱"）。
+
+## 常见陷阱与解决方案
+
+### ⚠️ 陷阱1: dylibbundler 修改了错误的文件
+
+**问题描述**:
+在 GitHub Actions 或 CI 环境中，可能出现以下情况：
+1. 日志显示 `otool -L build/Release/wsjtx_lib_nodejs.node` 的依赖路径已正确修改为 `@loader_path/xxx.dylib`
+2. 但下载到本地的 `prebuilds/darwin-arm64/wsjtx_lib_nodejs.node` 仍然是绝对路径（如 `/opt/homebrew/...`）
+
+**根本原因**:
+构建脚本的执行顺序错误：
+```bash
+# ❌ 错误的顺序
+cp build/Release/wsjtx_lib_nodejs.node "$TARGET_DIR/"  # 先复制
+NODE_FILE="build/Release/wsjtx_lib_nodejs.node"         # 指向原始文件
+dylibbundler -x "$NODE_FILE" ...                        # 修改的是原始文件
+# 结果: prebuilds/ 中的文件是修改前复制的,从未被 dylibbundler 处理过!
+```
+
+**解决方案**:
+确保 `dylibbundler` 处理的是**最终要打包的文件**：
+```bash
+# ✅ 正确的顺序
+cp build/Release/wsjtx_lib_nodejs.node "$TARGET_DIR/"  # 先复制
+NODE_FILE="$TARGET_DIR/wsjtx_lib_nodejs.node"          # 指向目标文件
+dylibbundler -x "$NODE_FILE" ...                        # 修改目标文件
+# 结果: prebuilds/ 中的文件就是被 dylibbundler 处理过的!
+```
+
+**验证方法**:
+```bash
+# 在 CI 日志中,应该看到处理的是 prebuilds/ 中的文件
+echo "Processing: $NODE_FILE"  # 应该输出 prebuilds/darwin-arm64/wsjtx_lib_nodejs.node
+
+# 验证时检查的也应该是 prebuilds/ 中的文件
+otool -L "$NODE_FILE"  # 而不是 build/Release/wsjtx_lib_nodejs.node
+```
+
+### ⚠️ 陷阱2: 嵌套子目录导致的路径解析错误
+
+**问题描述**:
+在 Electron 应用中加载模块时报错：
+```
+Error: dlopen(...): Library not loaded: @loader_path/native/libfftw3f.3.dylib
+Referenced from: .../native/libfftw3f_threads.3.dylib
+Reason: tried: '.../native/native/libfftw3f.3.dylib' (no such file)
+```
+
+**根本原因**:
+使用 `native/` 子目录时，dylib 之间的依赖路径解析出现嵌套：
+
+```
+目录结构:
+prebuilds/darwin-arm64/
+├── wsjtx_lib_nodejs.node
+└── native/
+    ├── libfftw3f.3.dylib
+    └── libfftw3f_threads.3.dylib
+
+libfftw3f_threads.3.dylib 的依赖:
+  @loader_path/native/libfftw3f.3.dylib
+
+解析过程:
+  @loader_path = native/ (libfftw3f_threads.3.dylib 所在目录)
+  @loader_path/native/libfftw3f.3.dylib = native/native/libfftw3f.3.dylib ❌
+```
+
+这是因为 `dylibbundler` 在处理时：
+- 修改 `.node` 文件的依赖 → `@loader_path/native/xxx.dylib` ✅ 正确
+- 修改 `native/` 目录下的 dylib 依赖 → **也是** `@loader_path/native/xxx.dylib` ❌ 错误!
+
+但当 dylib **自己在 native/ 目录**时，`@loader_path` 就是 `native/` 本身，再加上 `/native/` 就变成了 `native/native/`。
+
+**解决方案**:
+**不使用子目录**，将所有 dylib 与 `.node` 文件放在同级目录：
+
+```bash
+# macOS
+dylibbundler -x "$TARGET_DIR/wsjtx_lib_nodejs.node" \
+             -d "$TARGET_DIR" \              # 同级目录
+             -p "@loader_path/" \            # 不加 native/
+             -s /opt/homebrew/opt/fftw/lib \
+             -b
+
+# Linux
+patchelf --set-rpath '$ORIGIN' "$TARGET_DIR/wsjtx_lib_nodejs.node"  # 不加 /native
+```
+
+这样所有依赖都是 `@loader_path/xxx.dylib`，解析到同目录，简单清晰。
 
 参考命令均已集成到 GitHub Actions，避免自定义脚本堆叠；特殊场景请在本机按上述工具命令单步调试验证。
