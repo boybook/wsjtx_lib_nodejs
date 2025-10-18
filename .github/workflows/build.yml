@@ -405,7 +405,7 @@ jobs:
         run: |
           # 映射GitHub Actions平台名称到Node.js标准平台名称
           case "${{ matrix.os }}" in
-            ubuntu-latest) PLATFORM_NAME="linux" ;;
+            ubuntu-latest|ubuntu-*) PLATFORM_NAME="linux" ;;
             macos-latest) PLATFORM_NAME="darwin" ;;
             windows-latest) PLATFORM_NAME="win32" ;;
             *) PLATFORM_NAME="${{ matrix.os }}" ;;
@@ -527,7 +527,7 @@ jobs:
           
           # 映射GitHub Actions平台名称到Node.js标准平台名称
           case "${{ matrix.os }}" in
-            ubuntu-latest) PLATFORM_NAME="linux" ;;
+            ubuntu-latest|ubuntu-*) PLATFORM_NAME="linux" ;;
             macos-latest) PLATFORM_NAME="darwin" ;;
             windows-latest) PLATFORM_NAME="win32" ;;
             *) PLATFORM_NAME="${{ matrix.os }}" ;;
