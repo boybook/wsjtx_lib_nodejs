@@ -39,10 +39,12 @@ dylibbundler \
   -d prebuilds/darwin-arm64/native \
   -p "@loader_path/native/" \
   -s /opt/homebrew/opt/fftw/lib \
+  -s /opt/homebrew/opt/gcc/lib/gcc/current \
   -s /opt/homebrew/opt/gcc@14/lib/gcc/14 \
   -s /usr/local/opt/fftw/lib \
+  -s /usr/local/opt/gcc/lib/gcc/current \
   -s /usr/local/opt/gcc@14/lib/gcc/14 \
-  -od
+  -od -b
 ```
 - 验证：
 ```
@@ -93,4 +95,3 @@ CI 集成（简化、可重复）
 - Windows 不要放到子目录，除非同时调整 PATH 或引导加载器（不建议）。
 
 参考命令均已集成到 GitHub Actions，避免自定义脚本堆叠；特殊场景请在本机按上述工具命令单步调试验证。
-

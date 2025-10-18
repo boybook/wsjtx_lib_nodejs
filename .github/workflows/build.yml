@@ -465,10 +465,18 @@ jobs:
                 SP_ARGS="$SP_ARGS -s $p"
               fi
             done
+            # 动态加入 Cellar 路径，避免某些环境下找不到实际文件
+            BREW_PREFIX=$(brew --prefix 2>/dev/null || echo "/opt/homebrew")
+            for p in "$BREW_PREFIX/Cellar/fftw"/*/lib "$BREW_PREFIX/Cellar/gcc"/*/lib/gcc/current; do
+              if [ -d "$p" ]; then
+                SP_ARGS="$SP_ARGS -s $p"
+              fi
+            done
 
             # 使用 native 子目录集中依赖；-od 只清空 native，不影响 .node
             mkdir -p "$TARGET_DIR/native"
-            dylibbundler -x "$NODE_FILE" -d "$TARGET_DIR/native" -p "@loader_path/native/" $SP_ARGS -od
+            # 使用 -b 启用实际复制；-od 仅清空 native 子目录，不影响 .node 本体
+            dylibbundler -x "$NODE_FILE" -d "$TARGET_DIR/native" -p "@loader_path/native/" $SP_ARGS -od -b
 
             echo ""
             echo "📁 Bundled dylibs:"
