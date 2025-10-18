@@ -423,7 +423,8 @@ jobs:
           if [ -f "build/Release/wsjtx_lib_nodejs.node" ]; then
             cp build/Release/wsjtx_lib_nodejs.node "$TARGET_DIR/"
             echo "Copied from build/Release/"
-            NODE_FILE="build/Release/wsjtx_lib_nodejs.node"
+            # 重要: NODE_FILE 必须指向目标目录中的文件,这样 dylibbundler 才会修改正确的文件
+            NODE_FILE="$TARGET_DIR/wsjtx_lib_nodejs.node"
           else
             echo "❌ Native module not found for packaging at build/Release!"
             echo "当前 build 目录结构："
@@ -483,12 +484,17 @@ jobs:
             ls -la "$TARGET_DIR/native" || true
 
             echo ""
-            echo "🔎 Final otool -L of .node:"
+            echo "🔎 Final otool -L of packaged .node file ($NODE_FILE):"
             otool -L "$NODE_FILE"
 
             echo ""
-            echo "🔎 Final otool -L of .node:"
-            otool -L "$NODE_FILE"
+            echo "🔍 Verifying all dylib paths are relative:"
+            if otool -L "$NODE_FILE" | grep -E '^\s+(/opt/homebrew|/usr/local)'; then
+              echo "❌ ERROR: Found absolute Homebrew paths in final binary!"
+              exit 1
+            else
+              echo "✅ All dependency paths are relative"
+            fi
           fi
           
           # 显示构建结果
