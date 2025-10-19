@@ -429,12 +429,12 @@ if(WIN32 AND CMAKE_CXX_COMPILER_ID MATCHES "GNU")
     set(MINGW_NODE_LIB "${CMAKE_BINARY_DIR}/libnode.a")
 
     # 使用 gendef 和 dlltool 从 node.exe 生成 MinGW 导入库
-    # 注意: gendef的输出重定向需要使用 sh -c
     add_custom_command(
         OUTPUT "${MINGW_NODE_LIB}"
-        COMMAND sh -c "gendef - '${NODE_EXECUTABLE}' > '${CMAKE_BINARY_DIR}/node.def'"
+        COMMAND gendef - "${NODE_EXECUTABLE}" > "${CMAKE_BINARY_DIR}/node.def"
         COMMAND dlltool -d "${CMAKE_BINARY_DIR}/node.def" -l "${MINGW_NODE_LIB}"
         COMMENT "Generating MinGW import library from node.exe"
+        VERBATIM
     )
 
     add_custom_target(generate_node_lib DEPENDS "${MINGW_NODE_LIB}")
