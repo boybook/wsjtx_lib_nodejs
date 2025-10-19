@@ -137,25 +137,58 @@ jobs:
       - name: Build TypeScript
         run: npm run build:ts
 
-      # 6. 验证构建环境 - Windows
+      # 6. 验证构建环境 - Windows (基于 build_mingw.sh)
       - name: Verify build environment (Windows MSYS2)
         if: runner.os == 'Windows'
         shell: msys2 {0}
         run: |
-          echo "🔍 Verifying Windows MSYS2 build environment..."
-
-          # 验证必要工具
-          for tool in cmake gcc g++ gfortran pkg-config node npm npx; do
-            which $tool > /dev/null || { echo "❌ $tool not found"; exit 1; }
-          done
-          echo "✅ All build tools available"
-
-          # 验证依赖库
-          [ -f "node_modules/node-addon-api/napi.h" ] || { echo "❌ node-addon-api not found"; exit 1; }
-          pkg-config --exists fftw3f || { echo "❌ FFTW3F not found"; exit 1; }
-          [ -d "/mingw64/include/boost" ] || { echo "❌ Boost not found"; exit 1; }
-
-          echo "✅ All dependencies available"
+          echo "=== Verifying essential tools ==="
+          which cmake && cmake --version || { echo "❌ CMake not found"; exit 1; }
+          which gcc && gcc --version || { echo "❌ GCC not found"; exit 1; }
+          which g++ && g++ --version || { echo "❌ G++ not found"; exit 1; }
+          which gfortran && gfortran --version || { echo "❌ gfortran not found"; exit 1; }
+          which pkg-config && pkg-config --version || { echo "❌ pkg-config not found"; exit 1; }
+          which node && node --version || { echo "❌ Node.js not found"; exit 1; }
+          which npm && npm --version || { echo "❌ npm not found"; exit 1; }
+          which npx && npx --version || { echo "❌ npx not found"; exit 1; }
+          
+          echo -e "\n=== Checking node-addon-api headers ==="
+          if [ -d "node_modules/node-addon-api" ]; then
+              echo "✅ node-addon-api package found"
+              if [ -f "node_modules/node-addon-api/napi.h" ]; then
+                  echo "✅ napi.h found"
+              else
+                  echo "❌ napi.h not found"
+                  exit 1
+              fi
+          else
+              echo "❌ node-addon-api package not found"
+              exit 1
+          fi
+          
+          echo -e "\n=== Checking FFTW3 availability ==="
+          if pkg-config --exists fftw3f; then
+              echo "✅ FFTW3F found"
+              echo "FFTW3F libraries: $(pkg-config --libs fftw3f)"
+          else
+              echo "❌ FFTW3F not found"
+              exit 1
+          fi
+          
+          echo -e "\n=== Checking Boost installation ==="
+          if [ -d "/mingw64/include/boost" ]; then
+              echo "✅ Boost headers found"
+          else
+              echo "❌ Boost headers not found"
+              exit 1
+          fi
+          
+          if ls /mingw64/lib/libboost* >/dev/null 2>&1; then
+              echo "✅ Boost libraries found"
+          else
+              echo "❌ Boost libraries not found"
+              exit 1
+          fi
 
       # 7. 构建原生模块 - Linux/macOS
       - name: Build native module (Linux/macOS)
@@ -257,37 +290,112 @@ jobs:
         if: runner.os == 'Windows'
         shell: msys2 {0}
         run: |
-          echo "📁 Checking test environment..."
-
-          # 检查测试文件和原生模块
-          if [ ! -f "dist/test/wsjtx.basic.test.js" ]; then
-            echo "❌ Test file not found!"
-            find dist -name "*.test.js" -type f || echo "No test files found"
-            exit 1
-          fi
-
-          if [ ! -f "build/Release/wsjtx_lib_nodejs.node" ]; then
-            echo "❌ Native module not found!"
-            find . -name "*.node" -type f || echo "No .node files found"
-            exit 1
-          fi
-
-          echo "✅ Test file: dist/test/wsjtx.basic.test.js"
-          echo "✅ Native module: build/Release/wsjtx_lib_nodejs.node"
-
-          # 设置库路径
-          export PATH="/mingw64/bin:$PATH"
-          export LD_LIBRARY_PATH="/mingw64/lib:$LD_LIBRARY_PATH"
-
-          # 运行测试
-          echo ""
-          echo "🧪 Running tests..."
-          if npm test; then
-            echo "✅ Tests passed!"
+          echo "📁 Checking compiled files structure:"
+          
+          if [ -d "dist" ]; then
+            find dist -name "*.js" -type f | head -10
           else
-            echo "❌ Test failed"
-            echo "🔍 Attempting direct module load..."
-            node -e "try { require('./build/Release/wsjtx_lib_nodejs.node'); console.log('✅ Module loads OK'); } catch(e) { console.error('❌ Error:', e.message); }"
+            echo "dist directory not found"
+          fi
+          
+          # 检查测试文件是否存在
+          if [ -f "dist/test/wsjtx.basic.test.js" ]; then
+            echo "✅ Basic test file found: dist/test/wsjtx.basic.test.js"
+            
+          # 检查原生模块是否存在（统一要求 build/Release）
+          if [ -f "build/Release/wsjtx_lib_nodejs.node" ]; then
+            echo "✅ Native module found: build/Release/wsjtx_lib_nodejs.node"
+            ls -la build/Release/wsjtx_lib_nodejs.node
+
+            # 检查模块依赖
+            echo "🔍 Checking module dependencies..."
+            if command -v ldd >/dev/null 2>&1; then
+              ldd build/Release/wsjtx_lib_nodejs.node || echo "ldd failed, trying objdump"
+            fi
+            
+            echo ""
+            echo "🔍 Checking DLL dependencies with objdump:"
+            objdump -p build/Release/wsjtx_lib_nodejs.node | grep "DLL Name" || echo "objdump failed"
+              
+              # 检查关键库是否在PATH中可用
+              echo ""
+              echo "🔍 Checking library availability in MinGW environment:"
+              echo "PATH directories with libraries:"
+              echo $PATH | tr ':' '\n' | while read dir; do
+                if [ -d "$dir" ] && ls "$dir"/*.dll >/dev/null 2>&1; then
+                  echo "  📁 $dir"
+                  ls "$dir"/libfftw* "$dir"/libgfortran* "$dir"/libgcc* 2>/dev/null | head -3 || true
+                fi
+              done
+              
+              # 设置环境变量以确保库能被找到
+              echo ""
+              echo "🔧 Setting up library paths for testing..."
+              export PATH="/mingw64/bin:$PATH"
+              export LD_LIBRARY_PATH="/mingw64/lib:$LD_LIBRARY_PATH"
+              
+              echo "Updated PATH (first few entries):"
+              echo $PATH | tr ':' '\n' | head -3
+              
+              # 验证Node.js版本兼容性
+              echo ""
+              echo "🔍 Verifying Node.js environment:"
+              echo "MinGW Node.js version:"
+              which node && node --version || echo "Node.js not found in MinGW PATH"
+              
+              # 强制使用GitHub Actions安装的Node.js版本（与构建时一致）
+              echo ""
+              echo "🔧 Ensuring Node.js version consistency..."
+              echo "Expected Node.js version: ${{ env.NODE_VERSION }}"
+              
+              # 查找GitHub Actions安装的Node.js路径
+              GITHUB_NODE_PATH=""
+              if [ -f "/c/hostedtoolcache/node/${{ env.NODE_VERSION }}"*/x64/node.exe ]; then
+                GITHUB_NODE_PATH=$(dirname $(find /c/hostedtoolcache/node -name "node.exe" | grep "${{ env.NODE_VERSION }}" | head -1))
+                echo "Found GitHub Actions Node.js at: $GITHUB_NODE_PATH"
+              elif [ -f "/c/Program Files/nodejs/node.exe" ]; then
+                GITHUB_NODE_PATH="/c/Program Files/nodejs"
+                echo "Using system Node.js at: $GITHUB_NODE_PATH"
+              fi
+              
+              # 设置PATH，确保使用正确的Node.js版本，但保持MinGW库路径
+              if [ -n "$GITHUB_NODE_PATH" ]; then
+                export PATH="$GITHUB_NODE_PATH:/mingw64/bin:$PATH"
+                echo "Updated PATH to use GitHub Actions Node.js"
+                echo "Active Node.js version: $(node --version)"
+                echo "Active npm version: $(npm --version)"
+              else
+                echo "⚠️ Warning: Could not find GitHub Actions Node.js, using MinGW Node.js"
+                echo "This may cause version mismatch issues"
+              fi
+              
+              # 运行测试
+              echo ""
+              echo "🧪 Running tests with version-matched Node.js..."
+              npm test
+              test_result=$?
+              
+              if [ $test_result -eq 0 ]; then
+                echo "✅ Tests passed!"
+              else
+                echo "❌ Test failed with exit code: $test_result"
+                
+                # 尝试直接加载模块
+                echo "🔍 Trying to load module directly..."
+                node -e "try { require('./build/Release/wsjtx_lib_nodejs.node'); console.log('✅ Module loaded successfully'); } catch(e) { console.error('❌ Load error:', e.message); console.error('   Code:', e.code); }"
+                
+                exit $test_result
+              fi
+              
+            else
+              echo "❌ Native module not found! Searching for .node files..."
+              find . -name "*.node" -type f || echo "No .node files found"
+              exit 1
+            fi
+          else
+            echo "❌ Basic test file not found!"
+            echo "Available test files:"
+            find dist -name "*.test.js" -type f || echo "No test files found"
             exit 1
           fi
 
@@ -295,46 +403,123 @@ jobs:
       - name: Create prebuilt binaries (Linux/macOS)
         if: runner.os != 'Windows'
         run: |
-          # 加载辅助函数
-          source scripts/ci-helpers.sh
-
-          # 获取平台名称
-          PLATFORM_NAME=$(get_platform_name "${{ matrix.os }}")
+          # 映射GitHub Actions平台名称到Node.js标准平台名称
+          case "${{ matrix.os }}" in
+            ubuntu-latest|ubuntu-*) PLATFORM_NAME="linux" ;;
+            macos-latest) PLATFORM_NAME="darwin" ;;
+            windows-latest) PLATFORM_NAME="win32" ;;
+            *) PLATFORM_NAME="${{ matrix.os }}" ;;
+          esac
+          
+          # 创建目标目录
           TARGET_DIR="prebuilds/$PLATFORM_NAME-${{ matrix.arch }}"
-
-          echo "========================================="
-          echo "📦 Creating prebuilt package"
-          echo "========================================="
-          echo "Platform: $PLATFORM_NAME"
-          echo "Architecture: ${{ matrix.arch }}"
-          echo "Target: $TARGET_DIR"
-          echo "========================================="
-
+          echo "📁 Creating target directory: $TARGET_DIR"
+          echo "   • GitHub runner: ${{ matrix.os }}"  
+          echo "   • Node.js platform: $PLATFORM_NAME"
+          echo "   • Architecture: ${{ matrix.arch }}"
           mkdir -p "$TARGET_DIR"
-
-          # 复制 .node 文件
-          if [ ! -f "build/Release/wsjtx_lib_nodejs.node" ]; then
-            echo "❌ Native module not found at build/Release/"
-            find build -maxdepth 2 -name "*.node" -type f
+          
+          # 复制构建的 .node 文件（统一来自 build/Release）
+          if [ -f "build/Release/wsjtx_lib_nodejs.node" ]; then
+            cp build/Release/wsjtx_lib_nodejs.node "$TARGET_DIR/"
+            echo "Copied from build/Release/"
+            # 重要: NODE_FILE 必须指向目标目录中的文件,这样 dylibbundler 才会修改正确的文件
+            NODE_FILE="$TARGET_DIR/wsjtx_lib_nodejs.node"
+          else
+            echo "❌ Native module not found for packaging at build/Release!"
+            echo "当前 build 目录结构："
+            find build -maxdepth 2 -type f -name "*.node" -print || true
             exit 1
           fi
-
-          cp build/Release/wsjtx_lib_nodejs.node "$TARGET_DIR/"
-          NODE_FILE="$TARGET_DIR/wsjtx_lib_nodejs.node"
-          echo "✅ Copied .node file to $TARGET_DIR"
-
-          # 平台特定的依赖打包
+          
+          # 检查并复制动态依赖库
+          echo "🔍 Checking dynamic dependencies..."
+          
           if [ "${{ runner.os }}" = "Linux" ]; then
-            bundle_linux_dependencies "$NODE_FILE" "$TARGET_DIR"
+            echo "Checking Linux shared libraries..."
+            # 将依赖库与 .node 放在同级目录,与 macOS 和 Windows 保持一致
+            ldd "$NODE_FILE" | grep -v "linux-vdso\|ld-linux\|libc\|libm\|libpthread\|libdl" | awk '{print $3}' | grep -v "not found" | while read lib; do
+              if [ -f "$lib" ] && [[ "$lib" == *"libfftw"* || "$lib" == *"libgfortran"* || "$lib" == *"libgcc"* || "$lib" == *"libquadmath"* || "$lib" == *"libstdc++"* ]]; then
+                lib_name=$(basename "$lib")
+                echo "📦 Bundling: $lib_name -> $TARGET_DIR/"
+                cp -n "$lib" "$TARGET_DIR/" || cp "$lib" "$TARGET_DIR/"
+              fi
+            done
+            echo "Setting RPATH to \$ORIGIN (same directory as .node)"
+            patchelf --set-rpath '$ORIGIN' "$NODE_FILE" || true
+            echo "🔎 ldd after RPATH:"
+            ldd "$NODE_FILE" || true
+            echo ""
+            echo "📁 Bundled .so files in $TARGET_DIR:"
+            ls -la "$TARGET_DIR"/*.so* 2>/dev/null || echo "No .so files found"
           elif [ "${{ runner.os }}" = "macOS" ]; then
-            bundle_macos_dependencies "$NODE_FILE" "$TARGET_DIR"
+            echo "Bundling macOS dylibs with dylibbundler..."
+            # 优先在 Homebrew 的常见路径搜索
+            SEARCH_PATHS=(
+              "/opt/homebrew/opt/fftw/lib"
+              "/opt/homebrew/opt/gcc@14/lib/gcc/14"
+              "/opt/homebrew/opt/gcc/lib/gcc/current"
+              "/usr/local/opt/fftw/lib"
+              "/usr/local/opt/gcc@14/lib/gcc/14"
+              "/usr/local/opt/gcc/lib/gcc/current"
+            )
+            SP_ARGS=""
+            for p in "${SEARCH_PATHS[@]}"; do
+              if [ -d "$p" ]; then
+                SP_ARGS="$SP_ARGS -s $p"
+              fi
+            done
+            # 动态加入 Cellar 路径，避免某些环境下找不到实际文件
+            BREW_PREFIX=$(brew --prefix 2>/dev/null || echo "/opt/homebrew")
+            for p in "$BREW_PREFIX/Cellar/fftw"/*/lib "$BREW_PREFIX/Cellar/gcc"/*/lib/gcc/current; do
+              if [ -d "$p" ]; then
+                SP_ARGS="$SP_ARGS -s $p"
+              fi
+            done
+
+            # 将依赖库与 .node 放在同级目录,避免嵌套路径问题
+            # 注意: -od 会清空目标目录,但 .node 已经复制到 TARGET_DIR,dylibbundler 不会删除它
+            # 使用 -b 启用实际复制
+            dylibbundler -x "$NODE_FILE" -d "$TARGET_DIR" -p "@loader_path/" $SP_ARGS -b
+
+            echo ""
+            echo "📁 Bundled dylibs in $TARGET_DIR:"
+            ls -la "$TARGET_DIR"/*.dylib 2>/dev/null || echo "No dylib files found"
+
+            echo ""
+            echo "🔎 Final otool -L of packaged .node file ($NODE_FILE):"
+            otool -L "$NODE_FILE"
+
+            echo ""
+            echo "🔍 Verifying all dylib paths are relative:"
+            if otool -L "$NODE_FILE" | grep -E '^\s+(/opt/homebrew|/usr/local)'; then
+              echo "❌ ERROR: Found absolute Homebrew paths in final binary!"
+              exit 1
+            else
+              echo "✅ All dependency paths are relative"
+            fi
           fi
-
-          # 显示结果
-          show_package_summary "$TARGET_DIR"
-
-          # 创建构建信息
-          create_build_info "$TARGET_DIR" "$PLATFORM_NAME" "${{ matrix.os }}" "${{ matrix.arch }}" "${{ env.NODE_VERSION }}" "${{ matrix.cmake_arch }}"
+          
+          # 显示构建结果
+          echo "📁 构建完成的文件:"
+          ls -la "$TARGET_DIR"
+          
+          # 创建构建信息文件
+          cat > "$TARGET_DIR/build-info.json" << EOF
+          {
+            "platform": "$PLATFORM_NAME",
+            "github_runner": "${{ matrix.os }}",
+            "arch": "${{ matrix.arch }}",
+            "node_version": "${{ env.NODE_VERSION }}",
+            "build_time": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "cmake_arch": "${{ matrix.cmake_arch }}",
+            "file_size": $(stat -c%s "$TARGET_DIR"/*.node 2>/dev/null || stat -f%z "$TARGET_DIR"/*.node 2>/dev/null || echo "unknown"),
+            "bundled_libraries": $(ls "$TARGET_DIR" | grep -E "\\.(so|dylib)$" | wc -l)
+          }
+          EOF
+          
+          echo "📋 构建信息:"
+          cat "$TARGET_DIR/build-info.json"
         shell: bash
 
       # 11a. 创建预构建二进制文件 - Windows (MSYS2)
@@ -342,44 +527,151 @@ jobs:
         if: runner.os == 'Windows'
         shell: msys2 {0}
         run: |
-          # 加载辅助函数
-          source scripts/ci-helpers.sh
-
-          # 获取平台名称
-          PLATFORM_NAME=$(get_platform_name "${{ matrix.os }}")
+          echo "🔧 Windows prebuilt packaging started"
+          echo "Environment info:"
+          echo "  • Shell: $0"
+          echo "  • PWD: $(pwd)"
+          echo "  • User: $(whoami)"
+          echo ""
+          
+          # 映射GitHub Actions平台名称到Node.js标准平台名称
+          case "${{ matrix.os }}" in
+            ubuntu-latest|ubuntu-*) PLATFORM_NAME="linux" ;;
+            macos-latest) PLATFORM_NAME="darwin" ;;
+            windows-latest) PLATFORM_NAME="win32" ;;
+            *) PLATFORM_NAME="${{ matrix.os }}" ;;
+          esac
+          
+          # 创建目标目录
           TARGET_DIR="prebuilds/$PLATFORM_NAME-${{ matrix.arch }}"
-
-          echo "========================================="
-          echo "📦 Creating prebuilt package (Windows)"
-          echo "========================================="
-          echo "Platform: $PLATFORM_NAME"
-          echo "Architecture: ${{ matrix.arch }}"
-          echo "Target: $TARGET_DIR"
-          echo "========================================="
-
+          echo "📁 Creating target directory: $TARGET_DIR"
+          echo "   • GitHub runner: ${{ matrix.os }}"
+          echo "   • Node.js platform: $PLATFORM_NAME"
+          echo "   • Architecture: ${{ matrix.arch }}"
           mkdir -p "$TARGET_DIR"
-
-          # 复制 .node 文件
+          
+          # 复制构建的 .node 文件 - 检查两个可能的位置
           if [ -f "build/Release/wsjtx_lib_nodejs.node" ]; then
             cp build/Release/wsjtx_lib_nodejs.node "$TARGET_DIR/"
+            echo "✅ Copied from build/Release/"
             NODE_FILE="build/Release/wsjtx_lib_nodejs.node"
           elif [ -f "build/wsjtx_lib_nodejs.node" ]; then
             cp build/wsjtx_lib_nodejs.node "$TARGET_DIR/"
+            echo "✅ Copied from build/"
             NODE_FILE="build/wsjtx_lib_nodejs.node"
           else
-            echo "❌ Native module not found!"
+            echo "❌ Native module not found for packaging!"
             exit 1
           fi
-          echo "✅ Copied .node file to $TARGET_DIR"
-
-          # 打包 DLL 依赖
-          bundle_windows_dependencies "$NODE_FILE" "$TARGET_DIR"
-
-          # 显示结果
-          show_package_summary "$TARGET_DIR"
-
-          # 创建构建信息
-          create_build_info "$TARGET_DIR" "$PLATFORM_NAME" "${{ matrix.os }}" "${{ matrix.arch }}" "${{ env.NODE_VERSION }}" "${{ matrix.cmake_arch }}"
+          
+          # 检查并复制必要的DLL依赖
+          echo "🔍 Analyzing DLL dependencies..."
+          
+          # 获取DLL依赖列表
+          REQUIRED_DLLS=$(objdump -p "$NODE_FILE" | grep "DLL Name" | awk '{print $3}' | grep -E "(libfftw|libgfortran|libgcc|libwinpthread|libstdc)")
+          
+          echo "📦 Required DLLs to bundle:"
+          for dll in $REQUIRED_DLLS; do
+            echo "  - $dll"
+          done
+          
+          # 从MinGW复制必要的DLL（Windows 不使用子目录，需与 .node 同级）
+          echo ""
+          echo "📋 Copying DLLs from MinGW..."
+          bundled_count=0
+          missing_dlls=""
+          
+          # 首先检查MinGW目录是否存在
+          echo "🔍 Checking MinGW directory..."
+          if [ -d "/mingw64/bin" ]; then
+            echo "  ✅ /mingw64/bin exists"
+            echo "  Available DLLs in /mingw64/bin:"
+            ls /mingw64/bin/lib*.dll | head -10 || echo "  No lib*.dll files found"
+          else
+            echo "  ❌ /mingw64/bin not found!"
+            exit 1
+          fi
+          
+          echo ""
+          echo "📋 Processing each required DLL..."
+          for dll in $REQUIRED_DLLS; do
+            echo "  🔍 Checking: $dll"
+            if [ -f "/mingw64/bin/$dll" ]; then
+              if cp "/mingw64/bin/$dll" "$TARGET_DIR/" 2>/dev/null; then
+                echo "    ✅ Bundled: $dll"
+                bundled_count=$((bundled_count + 1))
+              else
+                echo "    ❌ Copy failed: $dll"
+                missing_dlls="$missing_dlls $dll"
+              fi
+            else
+              echo "    ❌ Missing: $dll"
+              missing_dlls="$missing_dlls $dll"
+              
+              # 尝试查找类似名称的文件
+              echo "    🔍 Looking for similar files..."
+              find /mingw64/bin -name "*${dll%%-*}*" -type f | head -3 || echo "    No similar files found"
+            fi
+          done
+          
+          # 报告结果
+          echo ""
+          echo "📊 DLL bundling summary:"
+          echo "  • Successfully bundled: $bundled_count DLLs"
+          if [ -n "$missing_dlls" ]; then
+            echo "  • Missing DLLs:$missing_dlls"
+            echo "  ⚠️  Some DLLs are missing, but continuing..."
+          fi
+          
+          # 显示最终结果
+          echo ""
+          echo "📁 Final package contents:"
+          ls -la "$TARGET_DIR"
+          
+          # 获取文件大小
+          node_size=$(stat -c%s "$TARGET_DIR"/*.node)
+          total_size=$(du -sb "$TARGET_DIR" | cut -f1)
+          
+          # 创建构建信息文件
+          # 获取实际捆绑的DLL列表
+          bundled_dll_list=""
+          for dll_file in "$TARGET_DIR"/*.dll; do
+            if [ -f "$dll_file" ]; then
+              dll_name=$(basename "$dll_file")
+              if [ -z "$bundled_dll_list" ]; then
+                bundled_dll_list="\"$dll_name\""
+              else
+                bundled_dll_list="$bundled_dll_list, \"$dll_name\""
+              fi
+            fi
+          done
+          
+          cat > "$TARGET_DIR/build-info.json" << EOF
+          {
+            "platform": "$PLATFORM_NAME",
+            "github_runner": "${{ matrix.os }}",
+            "arch": "${{ matrix.arch }}",
+            "node_version": "${{ env.NODE_VERSION }}",
+            "build_time": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "cmake_arch": "${{ matrix.cmake_arch }}",
+            "file_size": $node_size,
+            "bundled_libraries": $bundled_count,
+            "total_package_size": $total_size,
+            "required_dlls": [$(echo "$REQUIRED_DLLS" | sed 's/^/"/;s/$/"/' | paste -sd, -)],
+            "bundled_dlls": [$bundled_dll_list],
+            "missing_dlls": "$(echo $missing_dlls | sed 's/^ *//' | sed 's/ *$//')"
+          }
+          EOF
+          
+          echo ""
+          echo "📋 构建信息:"
+          cat "$TARGET_DIR/build-info.json"
+          
+          echo ""
+          echo "📊 Package summary:"
+          echo "  • Native module: $(basename $NODE_FILE) ($(numfmt --to=iec $node_size))"
+          echo "  • Bundled DLLs: $bundled_count"
+          echo "  • Total size: $(numfmt --to=iec $total_size)"
 
       # 12. 上传构建产物到 artifacts
       - name: Upload build artifacts
