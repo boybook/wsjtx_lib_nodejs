@@ -422,26 +422,19 @@ target_compile_options(${PROJECT_NAME} PRIVATE ${FFTW3F_CFLAGS_OTHER})
 
 # Link libraries with MinGW-specific handling
 if(WIN32 AND CMAKE_CXX_COMPILER_ID MATCHES "GNU")
-    # Windows MinGW: 从 node.exe 生成导入库
-    # MinGW 的 ld 不能使用 MSVC 的 .lib 文件
+    # Windows MinGW: 复制cmake-js提供的库文件
+    # 注意: 即使是MSVC的.lib文件,MinGW也能使用(已在1.1.6版本验证)
+    set(LOCAL_NODE_LIB "${CMAKE_BINARY_DIR}/node.lib")
 
-    find_program(NODE_EXECUTABLE node REQUIRED)
-    set(MINGW_NODE_LIB "${CMAKE_BINARY_DIR}/libnode.a")
-
-    # 使用 gendef 和 dlltool 从 node.exe 生成 MinGW 导入库
-    # 注意: gendef的输出重定向需要使用 sh -c
-    add_custom_command(
-        OUTPUT "${MINGW_NODE_LIB}"
-        COMMAND sh -c "gendef - '${NODE_EXECUTABLE}' > '${CMAKE_BINARY_DIR}/node.def'"
-        COMMAND dlltool -d "${CMAKE_BINARY_DIR}/node.def" -l "${MINGW_NODE_LIB}"
-        COMMENT "Generating MinGW import library from node.exe"
-    )
-
-    add_custom_target(generate_node_lib DEPENDS "${MINGW_NODE_LIB}")
-    add_dependencies(${PROJECT_NAME} generate_node_lib)
-
-    target_link_libraries(${PROJECT_NAME} PRIVATE "${MINGW_NODE_LIB}")
-    message(STATUS "MinGW build: Will generate import library from node.exe")
+    # 检查并复制 Node.js 库文件
+    if(EXISTS "${CMAKE_JS_LIB}")
+        message(STATUS "Copying Node.js library from: ${CMAKE_JS_LIB}")
+        configure_file("${CMAKE_JS_LIB}" "${LOCAL_NODE_LIB}" COPYONLY)
+        target_link_libraries(${PROJECT_NAME} PRIVATE "${LOCAL_NODE_LIB}")
+        message(STATUS "MinGW build: Using copied Node.js library: ${LOCAL_NODE_LIB}")
+    else()
+        message(STATUS "MinGW build: CMAKE_JS_LIB not found, skipping Node.js library linking")
+    endif()
 else()
     # Other platforms: link CMAKE_JS_LIB if available
     if(CMAKE_JS_LIB)
