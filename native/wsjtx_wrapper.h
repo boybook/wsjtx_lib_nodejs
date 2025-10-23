@@ -5,7 +5,16 @@
 #include <vector>
 #include <string>
 #include <complex>
-#include <wsjtx_lib.h>
+
+// Windows MSVC模式检测
+#if defined(_WIN32) && defined(_MSC_VER)
+    #define WSJTX_WINDOWS_MSVC_MODE 1
+    #include <windows.h>
+    #include "wsjtx_bridge.h"  // 引用主项目的bridge头文件
+#else
+    #define WSJTX_WINDOWS_MSVC_MODE 0
+    #include <wsjtx_lib.h>     // 非MSVC模式引用子模块头文件
+#endif
 
 namespace wsjtx_nodejs {
 
@@ -21,6 +30,7 @@ class WSJTXLibWrapper : public Napi::ObjectWrap<WSJTXLibWrapper> {
 public:
     static Napi::Object Init(Napi::Env env, Napi::Object exports);
     WSJTXLibWrapper(const Napi::CallbackInfo& info);
+    ~WSJTXLibWrapper();
 
 private:
     // Instance methods
@@ -50,8 +60,36 @@ private:
     std::vector<float> ConvertToFloatArray(Napi::Env env, const Napi::Value& audioData);
     std::vector<short int> ConvertToIntArray(Napi::Env env, const Napi::Value& audioData);
 
-    // Native library instance
+#if WSJTX_WINDOWS_MSVC_MODE
+    // Windows MSVC mode: Dynamic DLL loading
+    HMODULE dll_handle_;
+    wsjtx_handle_t lib_handle_;
+
+    // C API function pointers
+    typedef wsjtx_handle_t (*wsjtx_create_fn)();
+    typedef void (*wsjtx_destroy_fn)(wsjtx_handle_t);
+    typedef int (*wsjtx_decode_fn)(wsjtx_handle_t, wsjtx_mode_t, const float*, int, int, int);
+    typedef int (*wsjtx_pull_message_fn)(wsjtx_handle_t, wsjtx_message_t*);
+    typedef int (*wsjtx_encode_fn)(wsjtx_handle_t, wsjtx_mode_t, const char*, int, float*, int*);
+    typedef int (*wsjtx_get_sample_rate_fn)(wsjtx_mode_t);
+    typedef int (*wsjtx_get_max_samples_fn)(wsjtx_mode_t);
+
+    wsjtx_create_fn wsjtx_create_;
+    wsjtx_destroy_fn wsjtx_destroy_;
+    wsjtx_decode_fn wsjtx_decode_;
+    wsjtx_pull_message_fn wsjtx_pull_message_;
+    wsjtx_encode_fn wsjtx_encode_;
+    wsjtx_get_sample_rate_fn wsjtx_get_sample_rate_;
+    wsjtx_get_max_samples_fn wsjtx_get_max_samples_;
+
+    // Helper methods for DLL loading
+    void LoadDLL();
+    void UnloadDLL();
+    std::wstring GetDLLPath();
+#else
+    // Native library instance (Linux/macOS/MinGW)
     std::unique_ptr<wsjtx_lib> lib_;
+#endif
 };
 
 /**
@@ -71,19 +109,41 @@ protected:
  */
 class DecodeWorker : public AsyncWorkerBase {
 public:
-    DecodeWorker(Napi::Function& callback, 
+#if WSJTX_WINDOWS_MSVC_MODE
+    // MSVC mode constructors (using C API)
+    DecodeWorker(Napi::Function& callback,
+                 wsjtx_handle_t handle,
+                 wsjtx_decode_fn decode_fn,
+                 wsjtx_pull_message_fn pull_fn,
+                 wsjtxMode mode,
+                 const std::vector<float>& audioData,
+                 int frequency,
+                 int threads);
+
+    DecodeWorker(Napi::Function& callback,
+                 wsjtx_handle_t handle,
+                 wsjtx_decode_fn decode_fn,
+                 wsjtx_pull_message_fn pull_fn,
+                 wsjtxMode mode,
+                 const std::vector<short int>& audioData,
+                 int frequency,
+                 int threads);
+#else
+    // Non-MSVC mode constructors (using C++ API)
+    DecodeWorker(Napi::Function& callback,
                  wsjtx_lib* lib,
                  wsjtxMode mode,
                  const std::vector<float>& audioData,
                  int frequency,
                  int threads);
-    
-    DecodeWorker(Napi::Function& callback, 
+
+    DecodeWorker(Napi::Function& callback,
                  wsjtx_lib* lib,
                  wsjtxMode mode,
                  const std::vector<short int>& audioData,
                  int frequency,
                  int threads);
+#endif
 
     ~DecodeWorker() = default;
 
@@ -92,6 +152,11 @@ protected:
     void OnOK() override;
 
 private:
+#if WSJTX_WINDOWS_MSVC_MODE
+    wsjtx_handle_t handle_;
+    wsjtx_decode_fn decode_fn_;
+    wsjtx_pull_message_fn pull_fn_;
+#endif
     wsjtxMode mode_;
     std::vector<float> floatData_;
     std::vector<short int> intData_;
@@ -106,12 +171,25 @@ private:
  */
 class EncodeWorker : public AsyncWorkerBase {
 public:
+#if WSJTX_WINDOWS_MSVC_MODE
+    // MSVC mode constructor (using C API)
+    EncodeWorker(Napi::Function& callback,
+                 wsjtx_handle_t handle,
+                 wsjtx_encode_fn encode_fn,
+                 wsjtx_get_max_samples_fn get_max_samples_fn,
+                 wsjtxMode mode,
+                 const std::string& message,
+                 int frequency,
+                 int threads);
+#else
+    // Non-MSVC mode constructor (using C++ API)
     EncodeWorker(Napi::Function& callback,
                  wsjtx_lib* lib,
                  wsjtxMode mode,
                  const std::string& message,
                  int frequency,
                  int threads);
+#endif
 
     ~EncodeWorker() = default;
 
@@ -120,6 +198,11 @@ protected:
     void OnOK() override;
 
 private:
+#if WSJTX_WINDOWS_MSVC_MODE
+    wsjtx_handle_t handle_;
+    wsjtx_encode_fn encode_fn_;
+    wsjtx_get_max_samples_fn get_max_samples_fn_;
+#endif
     wsjtxMode mode_;
     std::string message_;
     int frequency_;

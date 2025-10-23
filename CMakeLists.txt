@@ -55,14 +55,35 @@ if(WIN32 AND CMAKE_CXX_COMPILER_ID MATCHES "GNU")
     message(STATUS "Cleared MSVC-specific linker flags for MinGW compatibility")
 endif()
 
-# Force avoid MSVC detection on Windows when using MinGW
-if(WIN32 AND MSVC)
-    message(FATAL_ERROR "MSVC compiler detected. This project requires MinGW-w64. Please use MSYS2/MinGW-w64 environment and specify -G \"MinGW Makefiles\"")
-endif()
+# Windows平台编译器检测和配置
+if(WIN32)
+    if(MSVC)
+        # MSVC编译模式：仅编译Native扩展层
+        message(STATUS "=== Windows MSVC Build Mode ===")
+        message(STATUS "Building native extension only (wsjtx_lib.dll must be pre-built with MinGW)")
+        set(WSJTX_WINDOWS_MSVC_MODE ON)
+        set(WSJTX_SKIP_LIB_BUILD ON)
 
-# Additional check for cmake-js on Windows - prevent Visual Studio generator
-if(WIN32 AND CMAKE_GENERATOR MATCHES "Visual Studio")
-    message(FATAL_ERROR "Visual Studio generator detected. This project requires MinGW-w64. Please set CMAKE_GENERATOR=MinGW Makefiles")
+        # MSVC编译选项
+        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /W4 /EHsc /std:c++17")
+        set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} /O2 /DNDEBUG")
+        set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} /Od /Zi")
+
+        # 使用动态链接的MSVC运行时库 (/MD)
+        set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreadedDLL")
+
+        message(STATUS "MSVC compiler flags configured")
+    elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU")
+        # MinGW编译模式：完整构建
+        message(STATUS "=== Windows MinGW Build Mode ===")
+        message(STATUS "Building complete project including wsjtx_lib.dll")
+        set(WSJTX_WINDOWS_MSVC_MODE OFF)
+        set(WSJTX_SKIP_LIB_BUILD OFF)
+    elseif(CMAKE_GENERATOR MATCHES "Visual Studio")
+        message(FATAL_ERROR "Visual Studio generator detected without MSVC compiler. Please use either MSVC or MinGW-w64.")
+    else()
+        message(WARNING "Unknown Windows compiler: ${CMAKE_CXX_COMPILER_ID}")
+    endif()
 endif()
 
 # Set compiler flags for better compatibility
@@ -322,8 +343,55 @@ elseif(WIN32)
     endif()
 endif()
 
-# Add wsjtx_lib as subdirectory
-add_subdirectory(wsjtx_lib)
+# Add wsjtx_lib as subdirectory (skip in MSVC mode)
+if(NOT WSJTX_SKIP_LIB_BUILD)
+    add_subdirectory(wsjtx_lib)
+
+    # Windows MinGW模式: 构建wsjtx_bridge.dll
+    if(WIN32 AND CMAKE_CXX_COMPILER_ID MATCHES "GNU")
+        message(STATUS "=== Building wsjtx_bridge.dll (MinGW) ===")
+
+        # 创建Bridge DLL
+        add_library(wsjtx_bridge SHARED
+            native/wsjtx_bridge.cpp
+            native/wsjtx_bridge.h
+        )
+
+        # 链接wsjtx_lib静态库
+        target_link_libraries(wsjtx_bridge PRIVATE
+            wsjtx_lib
+        )
+
+        # 设置编译选项
+        set_property(TARGET wsjtx_bridge PROPERTY CXX_STANDARD 17)
+        target_compile_definitions(wsjtx_bridge PRIVATE WSJTX_BRIDGE_EXPORTS)
+
+        # 包含子模块头文件目录
+        target_include_directories(wsjtx_bridge PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/wsjtx_lib
+        )
+
+        # 设置输出属性
+        set_target_properties(wsjtx_bridge PROPERTIES
+            OUTPUT_NAME "wsjtx_bridge"
+            PREFIX ""
+            SUFFIX ".dll"
+            RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/Release"
+        )
+
+        # 对于多配置生成器,设置各配置的输出目录
+        foreach(cfg Debug Release RelWithDebInfo MinSizeRel)
+            string(TOUPPER ${cfg} CFG_UPPER)
+            set_target_properties(wsjtx_bridge PROPERTIES
+                RUNTIME_OUTPUT_DIRECTORY_${CFG_UPPER} "${CMAKE_BINARY_DIR}/${cfg}"
+            )
+        endforeach()
+
+        message(STATUS "wsjtx_bridge.dll will be built with MinGW and linked with wsjtx_lib")
+    endif()
+else()
+    message(STATUS "Skipping wsjtx_lib build (MSVC mode)")
+endif()
 
 # Link directories (must be before creating target)
 link_directories(${FFTW3F_LIBRARY_DIRS})
@@ -400,9 +468,17 @@ if(WIN32 AND CMAKE_CXX_COMPILER_ID MATCHES "GNU")
     )
     message(STATUS "MinGW build: using MSYS2 Node.js headers and local node-addon-api")
     message(STATUS "CMAKE_JS_INC: ${CMAKE_JS_INC}")
+elseif(WIN32 AND MSVC)
+    # Windows MSVC: 使用 cmake-js 头文件 + 项目的 node-addon-api + native目录(用于wsjtx_bridge.h)
+    target_include_directories(${PROJECT_NAME} PRIVATE
+        ${CMAKE_JS_INC}
+        "${NODE_ADDON_API_PATH}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/native"
+    )
+    message(STATUS "MSVC build: using cmake-js headers and native directory for wsjtx_bridge.h")
 else()
     # 其他平台：使用 cmake-js 提供的头文件路径 + 项目的 node-addon-api
-    target_include_directories(${PROJECT_NAME} PRIVATE 
+    target_include_directories(${PROJECT_NAME} PRIVATE
         ${CMAKE_JS_INC}
         "${NODE_ADDON_API_PATH}"
     )
@@ -442,11 +518,21 @@ else()
     endif()
 endif()
 
-target_link_libraries(${PROJECT_NAME} PRIVATE
-    wsjtx_lib
-    ${FFTW3F_LIBRARIES}
-    ${BOOST_LIBRARIES}
-)
+# Link libraries based on build mode
+if(WSJTX_WINDOWS_MSVC_MODE)
+    # MSVC mode: don't link wsjtx_lib (will be loaded dynamically)
+    target_link_libraries(${PROJECT_NAME} PRIVATE
+        ${BOOST_LIBRARIES}
+    )
+    message(STATUS "MSVC mode: wsjtx_lib will be loaded dynamically via LoadLibrary")
+else()
+    # Other platforms: link wsjtx_lib statically
+    target_link_libraries(${PROJECT_NAME} PRIVATE
+        wsjtx_lib
+        ${FFTW3F_LIBRARIES}
+        ${BOOST_LIBRARIES}
+    )
+endif()
 
 # Platform-specific linking
 if(APPLE)

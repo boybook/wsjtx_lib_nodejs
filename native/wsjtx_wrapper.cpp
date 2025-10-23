@@ -102,8 +102,23 @@ namespace wsjtx_nodejs
 
     WSJTXLibWrapper::WSJTXLibWrapper(const Napi::CallbackInfo &info)
         : Napi::ObjectWrap<WSJTXLibWrapper>(info)
+#if WSJTX_WINDOWS_MSVC_MODE
+        , dll_handle_(nullptr)
+        , lib_handle_(nullptr)
+        , wsjtx_create_(nullptr)
+        , wsjtx_destroy_(nullptr)
+        , wsjtx_decode_(nullptr)
+        , wsjtx_pull_message_(nullptr)
+        , wsjtx_encode_(nullptr)
+        , wsjtx_get_sample_rate_(nullptr)
+        , wsjtx_get_max_samples_(nullptr)
+#endif
     {
+#if WSJTX_WINDOWS_MSVC_MODE
+        LoadDLL();
+#else
         lib_ = std::make_unique<wsjtx_lib>();
+#endif
     }
 
     // Decode method - supports Float32Array and Int16Array audio data
@@ -156,14 +171,24 @@ namespace wsjtx_nodejs
             {
                 // Float32Array
                 auto floatData = ConvertToFloatArray(env, audioData);
+#if WSJTX_WINDOWS_MSVC_MODE
+                auto worker = new DecodeWorker(callback, lib_handle_, wsjtx_decode_, wsjtx_pull_message_,
+                                               wsjtxModeVal, floatData, frequency, threads);
+#else
                 auto worker = new DecodeWorker(callback, lib_.get(), wsjtxModeVal, floatData, frequency, threads);
+#endif
                 worker->Queue();
             }
             else if (typedArray.TypedArrayType() == napi_int16_array)
             {
                 // Int16Array
                 auto intData = ConvertToIntArray(env, audioData);
+#if WSJTX_WINDOWS_MSVC_MODE
+                auto worker = new DecodeWorker(callback, lib_handle_, wsjtx_decode_, wsjtx_pull_message_,
+                                               wsjtxModeVal, intData, frequency, threads);
+#else
                 auto worker = new DecodeWorker(callback, lib_.get(), wsjtxModeVal, intData, frequency, threads);
+#endif
                 worker->Queue();
             }
             else
@@ -234,7 +259,12 @@ namespace wsjtx_nodejs
             return env.Null();
         }
 
+#if WSJTX_WINDOWS_MSVC_MODE
+        auto worker = new EncodeWorker(callback, lib_handle_, wsjtx_encode_, wsjtx_get_max_samples_,
+                                       wsjtxModeVal, message, frequency, threads);
+#else
         auto worker = new EncodeWorker(callback, lib_.get(), wsjtxModeVal, message, frequency, threads);
+#endif
         worker->Queue();
 
         return env.Undefined();
@@ -324,10 +354,17 @@ namespace wsjtx_nodejs
 
         Napi::Function callback = info[2].As<Napi::Function>();
 
+#if WSJTX_WINDOWS_MSVC_MODE
+        // WSPR功能在MSVC模式下暂不支持（C API未实现）
+        Napi::Error::New(env, "WSPR decoding is not yet supported in Windows MSVC mode")
+            .ThrowAsJavaScriptException();
+        return env.Null();
+#else
         auto worker = new WSPRDecodeWorker(callback, lib_.get(), iqData, decoderOptions);
         worker->Queue();
 
         return env.Undefined();
+#endif
     }
 
     // Pull decoded messages from the queue
@@ -336,13 +373,41 @@ namespace wsjtx_nodejs
         Napi::Env env = info.Env();
 
         Napi::Array results = Napi::Array::New(env);
-        WsjtxMessage msg;
         uint32_t count = 0;
 
+#if WSJTX_WINDOWS_MSVC_MODE
+        // MSVC mode: Use C API to pull messages from DLL
+        while (true)
+        {
+            wsjtx_message_t c_msg;
+            int has_message = wsjtx_pull_message_(lib_handle_, &c_msg);
+
+            if (has_message <= 0)
+            {
+                break; // No more messages
+            }
+
+            // Convert C message to JavaScript object
+            WsjtxMessage msg(
+                c_msg.hh,
+                c_msg.min,
+                c_msg.sec,
+                c_msg.snr,
+                c_msg.sync,
+                c_msg.dt,
+                c_msg.freq,
+                std::string(c_msg.message)
+            );
+            results[count++] = CreateWSJTXMessage(env, msg);
+        }
+#else
+        // Non-MSVC mode: Use C++ API
+        WsjtxMessage msg;
         while (lib_->pullMessage(msg))
         {
             results[count++] = CreateWSJTXMessage(env, msg);
         }
+#endif
 
         return results;
     }
@@ -401,8 +466,21 @@ namespace wsjtx_nodejs
         int mode = info[0].As<Napi::Number>().Int32Value();
         wsjtxMode wsjtxModeVal = ConvertToWSJTXMode(mode);
 
+#if WSJTX_WINDOWS_MSVC_MODE
+        // MSVC mode: Use C API
+        wsjtx_mode_t c_mode = static_cast<wsjtx_mode_t>(wsjtxModeVal);
+        int sampleRate = wsjtx_get_sample_rate_(c_mode);
+        if (sampleRate <= 0)
+        {
+            // Fallback to MODE_INFO if C API fails
+            auto it = MODE_INFO.find(wsjtxModeVal);
+            sampleRate = (it != MODE_INFO.end()) ? it->second.sampleRate : 12000;
+        }
+#else
+        // Non-MSVC mode: Use MODE_INFO lookup
         auto it = MODE_INFO.find(wsjtxModeVal);
         int sampleRate = (it != MODE_INFO.end()) ? it->second.sampleRate : 12000;
+#endif
 
         return Napi::Number::New(env, sampleRate);
     }
@@ -505,6 +583,45 @@ namespace wsjtx_nodejs
         : Napi::AsyncWorker(callback), lib_(lib) {}
 
     // Decode Worker
+#if WSJTX_WINDOWS_MSVC_MODE
+    // MSVC mode constructors
+    DecodeWorker::DecodeWorker(Napi::Function &callback,
+                               wsjtx_handle_t handle,
+                               wsjtx_decode_fn decode_fn,
+                               wsjtx_pull_message_fn pull_fn,
+                               wsjtxMode mode,
+                               const std::vector<float> &audioData,
+                               int frequency,
+                               int threads)
+        : AsyncWorkerBase(callback, nullptr),
+          handle_(handle),
+          decode_fn_(decode_fn),
+          pull_fn_(pull_fn),
+          mode_(mode),
+          floatData_(audioData),
+          frequency_(frequency),
+          threads_(threads),
+          useFloat_(true) {}
+
+    DecodeWorker::DecodeWorker(Napi::Function &callback,
+                               wsjtx_handle_t handle,
+                               wsjtx_decode_fn decode_fn,
+                               wsjtx_pull_message_fn pull_fn,
+                               wsjtxMode mode,
+                               const std::vector<short int> &audioData,
+                               int frequency,
+                               int threads)
+        : AsyncWorkerBase(callback, nullptr),
+          handle_(handle),
+          decode_fn_(decode_fn),
+          pull_fn_(pull_fn),
+          mode_(mode),
+          intData_(audioData),
+          frequency_(frequency),
+          threads_(threads),
+          useFloat_(false) {}
+#else
+    // Non-MSVC mode constructors
     DecodeWorker::DecodeWorker(Napi::Function &callback, wsjtx_lib *lib,
                                wsjtxMode mode, const std::vector<float> &audioData,
                                int frequency, int threads)
@@ -516,11 +633,52 @@ namespace wsjtx_nodejs
                                int frequency, int threads)
         : AsyncWorkerBase(callback, lib), mode_(mode), intData_(audioData),
           frequency_(frequency), threads_(threads), useFloat_(false) {}
+#endif
 
     void DecodeWorker::Execute()
     {
         try
         {
+#if WSJTX_WINDOWS_MSVC_MODE
+            // MSVC mode: Use C API
+            wsjtx_mode_t c_mode = static_cast<wsjtx_mode_t>(mode_);
+
+            // Prepare audio data (only float supported in C API for now)
+            std::vector<float> audioData;
+            if (useFloat_)
+            {
+                audioData = floatData_;
+            }
+            else
+            {
+                // Convert int16 to float
+                audioData.resize(intData_.size());
+                for (size_t i = 0; i < intData_.size(); ++i)
+                {
+                    audioData[i] = static_cast<float>(intData_[i]) / 32768.0f;
+                }
+            }
+
+            // Call C API decode function
+            int result = decode_fn_(
+                handle_,
+                c_mode,
+                audioData.data(),
+                static_cast<int>(audioData.size()),
+                frequency_,
+                threads_
+            );
+
+            if (result != WSJTX_OK)
+            {
+                SetError("Decode failed with error code: " + std::to_string(result));
+                return;
+            }
+
+            // Note: Messages are stored in the DLL's internal queue
+            // User will call pullMessages() later to retrieve them
+#else
+            // Non-MSVC mode: Use C++ API
             if (useFloat_)
             {
                 std::vector<float> data = floatData_; // Copy for thread safety
@@ -531,6 +689,7 @@ namespace wsjtx_nodejs
                 std::vector<short int> data = intData_; // Copy for thread safety
                 lib_->decode(mode_, data, frequency_, threads_);
             }
+#endif
         }
         catch (const std::exception &e)
         {
@@ -545,19 +704,83 @@ namespace wsjtx_nodejs
     }
 
     // Encode Worker
+#if WSJTX_WINDOWS_MSVC_MODE
+    // MSVC mode constructor
+    EncodeWorker::EncodeWorker(Napi::Function &callback,
+                               wsjtx_handle_t handle,
+                               wsjtx_encode_fn encode_fn,
+                               wsjtx_get_max_samples_fn get_max_samples_fn,
+                               wsjtxMode mode,
+                               const std::string &message,
+                               int frequency,
+                               int threads)
+        : AsyncWorkerBase(callback, nullptr),
+          handle_(handle),
+          encode_fn_(encode_fn),
+          get_max_samples_fn_(get_max_samples_fn),
+          mode_(mode),
+          message_(message),
+          frequency_(frequency),
+          threads_(threads) {}
+#else
+    // Non-MSVC mode constructor
     EncodeWorker::EncodeWorker(Napi::Function &callback, wsjtx_lib *lib,
                                wsjtxMode mode, const std::string &message,
                                int frequency, int threads)
         : AsyncWorkerBase(callback, lib), mode_(mode), message_(message),
           frequency_(frequency), threads_(threads) {}
+#endif
 
     void EncodeWorker::Execute()
     {
         try
         {
+#if WSJTX_WINDOWS_MSVC_MODE
+            // MSVC mode: Use C API
+            wsjtx_mode_t c_mode = static_cast<wsjtx_mode_t>(mode_);
+
+            // Get maximum sample count for this mode
+            int max_samples = get_max_samples_fn_(c_mode);
+            if (max_samples <= 0)
+            {
+                SetError("Failed to get maximum sample count for mode");
+                return;
+            }
+
+            // Allocate output buffer
+            std::vector<float> output_buffer(max_samples);
+            int actual_samples = max_samples;
+
+            // Call C API encode function
+            int result = encode_fn_(
+                handle_,
+                c_mode,
+                message_.c_str(),
+                frequency_,
+                output_buffer.data(),
+                &actual_samples
+            );
+
+            if (result != WSJTX_OK)
+            {
+                SetError("Encode failed with error code: " + std::to_string(result));
+                return;
+            }
+
+            // Resize and store audio data
+            audioData_.resize(actual_samples);
+            std::copy(output_buffer.begin(),
+                     output_buffer.begin() + actual_samples,
+                     audioData_.begin());
+
+            // C API doesn't modify the message, so messageSent_ is same as input
+            messageSent_ = message_;
+#else
+            // Non-MSVC mode: Use C++ API
             std::string messageSend;
             audioData_ = lib_->encode(mode_, frequency_, message_, messageSend);
             messageSent_ = messageSend;
+#endif
         }
         catch (const std::exception &e)
         {
@@ -685,6 +908,144 @@ namespace wsjtx_nodejs
             Callback().Call({ env.Null(), out });
         }
     }
+
+#if WSJTX_WINDOWS_MSVC_MODE
+    // Windows MSVC mode: DLL loading implementation
+
+    std::wstring WSJTXLibWrapper::GetDLLPath()
+    {
+        // Get the path of the current .node module
+        wchar_t modulePath[MAX_PATH];
+        HMODULE hModule = nullptr;
+
+        // Get the handle of the current module (.node file)
+        GetModuleHandleExW(
+            GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+            reinterpret_cast<LPCWSTR>(&WSJTXLibWrapper::Init),
+            &hModule);
+
+        if (hModule == nullptr)
+        {
+            throw std::runtime_error("Failed to get module handle");
+        }
+
+        // Get the full path of the module
+        if (GetModuleFileNameW(hModule, modulePath, MAX_PATH) == 0)
+        {
+            throw std::runtime_error("Failed to get module file name");
+        }
+
+        // Extract directory path
+        std::wstring moduleDir(modulePath);
+        size_t lastSlash = moduleDir.find_last_of(L"\\/");
+        if (lastSlash == std::wstring::npos)
+        {
+            throw std::runtime_error("Failed to extract module directory");
+        }
+
+        moduleDir = moduleDir.substr(0, lastSlash);
+
+        // Construct DLL path (use wsjtx_bridge.dll)
+        std::wstring dllPath = moduleDir + L"\\wsjtx_bridge.dll";
+
+        return dllPath;
+    }
+
+    void WSJTXLibWrapper::LoadDLL()
+    {
+        try
+        {
+            // Get DLL path
+            std::wstring dllPath = GetDLLPath();
+            std::wstring dllDir = dllPath.substr(0, dllPath.find_last_of(L"\\/"));
+
+            // Set DLL search directory to ensure dependencies are found
+            SetDllDirectoryW(dllDir.c_str());
+
+            // Load the DLL using absolute path
+            dll_handle_ = LoadLibraryW(dllPath.c_str());
+
+            if (!dll_handle_)
+            {
+                DWORD error = GetLastError();
+                std::string msg = "Failed to load wsjtx_bridge.dll (error code: " + std::to_string(error) + ")";
+                throw std::runtime_error(msg);
+            }
+
+            // Get function pointers
+            wsjtx_create_ = reinterpret_cast<wsjtx_create_fn>(GetProcAddress(dll_handle_, "wsjtx_create"));
+            wsjtx_destroy_ = reinterpret_cast<wsjtx_destroy_fn>(GetProcAddress(dll_handle_, "wsjtx_destroy"));
+            wsjtx_decode_ = reinterpret_cast<wsjtx_decode_fn>(GetProcAddress(dll_handle_, "wsjtx_decode"));
+            wsjtx_pull_message_ = reinterpret_cast<wsjtx_pull_message_fn>(GetProcAddress(dll_handle_, "wsjtx_pull_message"));
+            wsjtx_encode_ = reinterpret_cast<wsjtx_encode_fn>(GetProcAddress(dll_handle_, "wsjtx_encode"));
+            wsjtx_get_sample_rate_ = reinterpret_cast<wsjtx_get_sample_rate_fn>(GetProcAddress(dll_handle_, "wsjtx_get_sample_rate"));
+            wsjtx_get_max_samples_ = reinterpret_cast<wsjtx_get_max_samples_fn>(GetProcAddress(dll_handle_, "wsjtx_get_max_samples"));
+
+            // Verify all required functions were loaded
+            if (!wsjtx_create_ || !wsjtx_destroy_ || !wsjtx_decode_ ||
+                !wsjtx_pull_message_ || !wsjtx_encode_ ||
+                !wsjtx_get_sample_rate_ || !wsjtx_get_max_samples_)
+            {
+                UnloadDLL();
+                throw std::runtime_error("Failed to load one or more required functions from wsjtx_bridge.dll");
+            }
+
+            // Create library instance
+            lib_handle_ = wsjtx_create_();
+
+            if (!lib_handle_)
+            {
+                UnloadDLL();
+                throw std::runtime_error("Failed to create WSJTX library instance");
+            }
+
+            // Restore DLL search path
+            SetDllDirectoryW(nullptr);
+        }
+        catch (const std::exception &e)
+        {
+            // Make sure to clean up and restore DLL search path on error
+            SetDllDirectoryW(nullptr);
+            throw;
+        }
+    }
+
+    void WSJTXLibWrapper::UnloadDLL()
+    {
+        // Destroy library instance
+        if (lib_handle_ && wsjtx_destroy_)
+        {
+            wsjtx_destroy_(lib_handle_);
+            lib_handle_ = nullptr;
+        }
+
+        // Unload DLL
+        if (dll_handle_)
+        {
+            FreeLibrary(dll_handle_);
+            dll_handle_ = nullptr;
+        }
+
+        // Clear function pointers
+        wsjtx_create_ = nullptr;
+        wsjtx_destroy_ = nullptr;
+        wsjtx_decode_ = nullptr;
+        wsjtx_pull_message_ = nullptr;
+        wsjtx_encode_ = nullptr;
+        wsjtx_get_sample_rate_ = nullptr;
+        wsjtx_get_max_samples_ = nullptr;
+    }
+
+    // Destructor
+    WSJTXLibWrapper::~WSJTXLibWrapper()
+    {
+        UnloadDLL();
+    }
+
+#else
+    // Non-Windows or MinGW mode: default destructor
+    WSJTXLibWrapper::~WSJTXLibWrapper() = default;
+#endif
 
     // Module initialization
     Napi::Object Init(Napi::Env env, Napi::Object exports)

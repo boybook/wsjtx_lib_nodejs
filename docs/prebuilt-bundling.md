@@ -185,4 +185,163 @@ patchelf --set-rpath '$ORIGIN' "$TARGET_DIR/wsjtx_lib_nodejs.node"  # 不加 /na
 
 这样所有依赖都是 `@loader_path/xxx.dylib`，解析到同目录，简单清晰。
 
+### ⚠️ 陷阱3: Windows prebuildify spawn EINVAL 错误
+
+**问题描述**:
+在 Windows CI 环境中运行 `prebuildify --napi --strip` 时失败：
+```
+Error: spawn EINVAL
+    at ChildProcess.spawn (node:internal/child_process:414:11)
+    at Object.spawn (node:child_process:761:9)
+    at prebuildify/index.js:212:22
+  errno: -4071,
+  code: 'EINVAL',
+  syscall: 'spawn'
+```
+
+**根本原因**:
+1. Windows 上的 `node-gyp` 是 `.cmd` 批处理文件，不是可执行程序
+2. Node.js 的 `child_process.spawn()` 默认**不能**直接执行 `.cmd` 文件
+3. 需要通过 `cmd.exe /c` 包装执行，或设置 `{shell: true}` 选项
+4. `prebuildify` 内部使用 `proc.spawn(opts.nodeGyp, args, { stdio: 'inherit' })` 调用 node-gyp
+5. 没有设置 `shell: true`，导致在 Windows 上抛出 `EINVAL` 错误
+
+**技术细节**:
+```javascript
+// prebuildify 内部代码（简化）
+var child = proc.spawn(opts.nodeGyp, args, {
+  cwd: opts.cwd,
+  env: opts.env,
+  stdio: opts.quiet ? 'ignore' : 'inherit'
+  // ❌ 缺少 shell: true
+});
+
+// 在 Windows 上，opts.nodeGyp 通常是 "node-gyp.cmd"
+// spawn 无法直接执行 .cmd 文件，导致 EINVAL 错误
+```
+
+**为什么常规方案无效**:
+
+尝试 1 - 在 workflow 中设置 shell:
+```yaml
+# ❌ 无效：只影响 workflow 步骤，不影响 prebuildify 内部的 spawn
+- name: Generate prebuilds
+  shell: cmd
+  run: npm run prebuild
+```
+
+尝试 2 - 设置环境变量:
+```yaml
+# ❌ 无效：只改变路径，不解决 spawn 无法执行 .cmd 的问题
+- run: |
+    set PREBUILD_NODE_GYP=node-gyp.cmd
+    npx prebuildify --napi --strip
+```
+
+尝试 3 - 直接调用 node-gyp:
+```yaml
+# ⚠️ 部分有效：绕过 prebuildify，但失去其便利性
+- run: |
+    node-gyp rebuild
+    # 需要手动创建 prebuilds 目录结构
+```
+
+**正确解决方案**:
+通过 **monkey-patching** `child_process.spawn` 来拦截和修复 `.cmd` 调用。
+
+创建 `scripts/run-prebuildify.js`:
+```javascript
+#!/usr/bin/env node
+// Windows-safe prebuildify runner that wraps child_process.spawn for node-gyp
+const os = require('os');
+const path = require('path');
+const cp = require('child_process');
+
+// 保存原始的 spawn 函数
+const origSpawn = cp.spawn;
+
+// 替换 spawn 函数
+cp.spawn = function patchedSpawn(command, args, options) {
+  if (process.platform === 'win32') {
+    // 检测是否是 .cmd 文件或 node-gyp
+    const isCmd = /\.cmd$/i.test(command) || /node-gyp(\.js)?$/i.test(command);
+    if (isCmd) {
+      // 通过 cmd.exe 包装执行
+      const cmdExe = process.env.ComSpec || 'cmd.exe';
+      const cmdline = [command].concat(args || []).join(' ');
+      return origSpawn(cmdExe, ['/d', '/s', '/c', cmdline],
+        Object.assign({ stdio: 'inherit' }, options, { shell: false }));
+    }
+  }
+  // 非 Windows 或非 .cmd 文件，使用原始 spawn
+  return origSpawn(command, args, options);
+};
+
+// 在 patch 之后调用 prebuildify
+const prebuildify = require('prebuildify');
+
+const opts = {
+  napi: true,
+  strip: true,
+  cwd: process.cwd(),
+  arch: process.env.PREBUILD_ARCH || os.arch(),
+  platform: process.env.PREBUILD_PLATFORM || os.platform(),
+  nodeGyp: process.env.PREBUILD_NODE_GYP || path.join(
+    process.cwd(),
+    'node_modules',
+    '.bin',
+    process.platform === 'win32' ? 'node-gyp.cmd' : 'node-gyp'
+  )
+};
+
+prebuildify(opts, (err) => {
+  if (err) {
+    console.error(err.stack || err.message || String(err));
+    process.exit(1);
+  }
+  console.log('prebuildify completed successfully');
+});
+```
+
+在 GitHub Actions workflow 中使用:
+```yaml
+- name: Generate prebuilds (Windows)
+  if: matrix.os == 'windows-latest'
+  run: node scripts/run-prebuildify.js
+```
+
+**工作流程**:
+1. `run-prebuildify.js` 首先 patch `child_process.spawn` 函数
+2. 然后调用 `prebuildify(opts, callback)`
+3. `prebuildify` 内部尝试 `spawn('node-gyp.cmd', args, ...)`
+4. 被 patch 的 `spawn` 自动检测到 `.cmd` 文件
+5. 自动转换为 `spawn('cmd.exe', ['/c', 'node-gyp.cmd', ...args], ...)`
+6. 成功执行 ✅
+
+**为什么这个方案有效**:
+- ✅ 在 prebuildify 执行之前注入补丁
+- ✅ 所有通过 prebuildify 的 spawn 调用都会被自动修复
+- ✅ 对 Linux/macOS 透明（不影响其他平台）
+- ✅ 无需修改 prebuildify 源码
+- ✅ 经过生产环境验证（node-hamlib v0.1.22+）
+
+**注意事项**:
+1. 这个脚本**必须**在调用 prebuildify 之前执行 patch
+2. 不能使用 `npm run prebuild` 直接调用 prebuildify，因为那样 patch 不会生效
+3. 必须使用 `node scripts/run-prebuildify.js` 来执行
+4. 这是 Windows 平台特有的解决方案，Linux/macOS 不需要
+
+**验证方法**:
+```bash
+# 本地 Windows 测试
+node scripts/run-prebuildify.js
+
+# 应该看到输出：
+# prebuildify completed successfully
+# prebuilds/win32-x64/node.napi.node 已创建
+```
+
+**历史教训**:
+在重构打包流程时，如果删除了这个脚本，Windows 构建会立即失败。这是一个**不可替代**的关键脚本，直到 prebuildify 官方修复这个问题为止。
+
 参考命令均已集成到 GitHub Actions，避免自定义脚本堆叠；特殊场景请在本机按上述工具命令单步调试验证。
