@@ -7,7 +7,9 @@ if(DEFINED CMAKE_TOOLCHAIN_FILE AND CMAKE_TOOLCHAIN_FILE MATCHES "vcpkg")
     message(STATUS "Detected vcpkg toolchain, disabling manifest mode")
 endif()
 
-project(wsjtx_lib_nodejs LANGUAGES C CXX Fortran)
+# 初始化项目，暂时只声明C和C++
+# Fortran将在需要时通过enable_language()启用
+project(wsjtx_lib_nodejs LANGUAGES C CXX)
 
 # Set C++ standard
 set(CMAKE_CXX_STANDARD 17)
@@ -91,7 +93,7 @@ if(UNIX AND NOT APPLE)
     # Linux specific flags
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fPIC -fvisibility=hidden")
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fPIC")
-    set(CMAKE_Fortran_FLAGS "${CMAKE_Fortran_FLAGS} -fPIC")
+    # Fortran flags will be set after enable_language(Fortran) is called
     
     # Suppress some warnings that are common in the wsjtx_lib code
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-stringop-overflow -Wno-deprecated-declarations")
@@ -345,6 +347,16 @@ endif()
 
 # Add wsjtx_lib as subdirectory (skip in MSVC mode)
 if(NOT WSJTX_SKIP_LIB_BUILD)
+    # 启用Fortran语言（仅在需要构建wsjtx_lib时）
+    enable_language(Fortran)
+    message(STATUS "Fortran compiler enabled for wsjtx_lib build")
+
+    # 设置Fortran编译标志（在启用Fortran后）
+    if(UNIX AND NOT APPLE)
+        # Linux specific Fortran flags
+        set(CMAKE_Fortran_FLAGS "${CMAKE_Fortran_FLAGS} -fPIC")
+    endif()
+
     add_subdirectory(wsjtx_lib)
 
     # Windows MinGW模式: 构建wsjtx_bridge.dll
