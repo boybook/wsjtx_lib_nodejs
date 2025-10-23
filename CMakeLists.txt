@@ -26,18 +26,19 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 # Include cmake-js
 if(CMAKE_JS_INC)
     include_directories(${CMAKE_JS_INC})
-endif()
-
-# Add Node.js include path
-execute_process(
-    COMMAND node -p "require('path').dirname(process.execPath) + '/../include/node'"
-    OUTPUT_VARIABLE NODE_INCLUDE_DIR
-    OUTPUT_STRIP_TRAILING_WHITESPACE
-    ERROR_QUIET
-)
-if(NODE_INCLUDE_DIR AND EXISTS "${NODE_INCLUDE_DIR}")
-    include_directories(${NODE_INCLUDE_DIR})
-    message(STATUS "Node.js include directory: ${NODE_INCLUDE_DIR}")
+    message(STATUS "Using cmake-js include directory: ${CMAKE_JS_INC}")
+else()
+    # Fallback: Add Node.js include path if cmake-js is not used
+    execute_process(
+        COMMAND node -p "require('path').dirname(process.execPath) + '/../include/node'"
+        OUTPUT_VARIABLE NODE_INCLUDE_DIR
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET
+    )
+    if(NODE_INCLUDE_DIR AND EXISTS "${NODE_INCLUDE_DIR}")
+        include_directories(${NODE_INCLUDE_DIR})
+        message(STATUS "Node.js include directory: ${NODE_INCLUDE_DIR}")
+    endif()
 endif()
 
 # ==================== 平台特定编译选项 ====================
@@ -90,28 +91,27 @@ endif()
 
 # ==================== 依赖库查找 ====================
 
-# Boost (header-only)
-if(WIN32 AND NOT MSVC)
-    # MinGW: 尝试find_package和手动查找
-    find_package(Boost QUIET)
-    if(NOT Boost_FOUND)
-        find_path(Boost_INCLUDE_DIRS
-            NAMES boost/version.hpp
-            PATHS /mingw64/include C:/msys64/mingw64/include
-            NO_DEFAULT_PATH
-        )
-        if(Boost_INCLUDE_DIRS)
-            message(STATUS "Found Boost headers: ${Boost_INCLUDE_DIRS}")
-            set(Boost_FOUND TRUE)
-        endif()
-    endif()
-else()
-    # 其他平台
-    find_package(Boost REQUIRED)
-endif()
-
 # pkg-config 和 FFTW3（仅在构建库时需要）
 if(WSJTX_BUILD_LIBS)
+    # Boost (header-only) - 仅在构建wsjtx_lib时需要
+    if(WIN32 AND NOT MSVC)
+        # MinGW: 尝试find_package和手动查找
+        find_package(Boost QUIET)
+        if(NOT Boost_FOUND)
+            find_path(Boost_INCLUDE_DIRS
+                NAMES boost/version.hpp
+                PATHS /mingw64/include C:/msys64/mingw64/include
+                NO_DEFAULT_PATH
+            )
+            if(Boost_INCLUDE_DIRS)
+                message(STATUS "Found Boost headers: ${Boost_INCLUDE_DIRS}")
+                set(Boost_FOUND TRUE)
+            endif()
+        endif()
+    else()
+        # 其他平台
+        find_package(Boost REQUIRED)
+    endif()
     find_package(PkgConfig REQUIRED)
     pkg_check_modules(FFTW3F REQUIRED fftw3f)
 
@@ -172,15 +172,21 @@ if(NOT NODE_ADDON_API_PATH)
     message(FATAL_ERROR "Could not find node-addon-api")
 endif()
 
-# Include directories
+# Include directories (base paths needed by all targets)
 include_directories(
     ${CMAKE_SOURCE_DIR}/wsjtx_lib
     ${CMAKE_SOURCE_DIR}/wsjtx_bridge
     ${CMAKE_SOURCE_DIR}/native
     ${NODE_ADDON_API_PATH}
-    ${FFTW3F_INCLUDE_DIRS}
-    ${Boost_INCLUDE_DIRS}
 )
+
+# Only add FFTW and Boost includes when building libs
+if(WSJTX_BUILD_LIBS)
+    include_directories(
+        ${FFTW3F_INCLUDE_DIRS}
+        ${Boost_INCLUDE_DIRS}
+    )
+endif()
 
 # ==================== 库依赖定义 ====================
 
@@ -360,10 +366,10 @@ if(WSJTX_BUILD_NODE_ADDON)
         target_link_libraries(${PROJECT_NAME} PRIVATE ${CMAKE_JS_LIB})
     endif()
 
-    # 链接库（仅链接Boost，运行时动态加载wsjtx_bridge）
-    target_link_libraries(${PROJECT_NAME} PRIVATE
-        ${BOOST_LIBRARIES}
-    )
+    # 链接Boost（仅在构建wsjtx_lib时需要，MSVC模式下不需要）
+    if(WSJTX_BUILD_LIBS AND BOOST_LIBRARIES)
+        target_link_libraries(${PROJECT_NAME} PRIVATE ${BOOST_LIBRARIES})
+    endif()
 
     message(STATUS ".node extension will dynamically load wsjtx_bridge at runtime")
     message(STATUS "Build complete: wsjtx_lib (static) -> wsjtx_bridge (dynamic) -> .node (loads bridge)")

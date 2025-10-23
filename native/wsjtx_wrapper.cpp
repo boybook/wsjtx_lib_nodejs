@@ -257,6 +257,12 @@ namespace wsjtx_nodejs
     {
         Napi::Env env = info.Env();
 
+#if WSJTX_WINDOWS_MSVC_MODE
+        // WSPR is not supported in MSVC bridge mode
+        Napi::Error::New(env, "WSPR decode is not currently supported in Windows MSVC mode")
+            .ThrowAsJavaScriptException();
+        return env.Null();
+#else
         if (info.Length() < 3)
         {
             Napi::TypeError::New(env, "Expected 3 arguments: iqData, options, callback")
@@ -340,6 +346,7 @@ namespace wsjtx_nodejs
         Napi::Error::New(env, "WSPR decoding is not yet supported in the current bridge architecture. Use standard decode() for supported modes.")
             .ThrowAsJavaScriptException();
         return env.Null();
+#endif
     }
 
     // Pull decoded messages from the queue
@@ -362,17 +369,8 @@ namespace wsjtx_nodejs
             }
 
             // Convert C message to JavaScript object
-            WsjtxMessage msg(
-                c_msg.hh,
-                c_msg.min,
-                c_msg.sec,
-                c_msg.snr,
-                c_msg.sync,
-                c_msg.dt,
-                c_msg.freq,
-                std::string(c_msg.message)
-            );
-            results[count++] = CreateWSJTXMessage(env, msg);
+            // In MSVC mode, WsjtxMessage is just wsjtx_message_t (a C struct)
+            results[count++] = CreateWSJTXMessage(env, c_msg);
         }
 
         return results;
@@ -531,7 +529,7 @@ namespace wsjtx_nodejs
     {
         Napi::Object result = Napi::Object::New(env);
 
-        result.Set("text", Napi::String::New(env, msg.msg));
+        result.Set("text", Napi::String::New(env, msg.message));
         result.Set("snr", Napi::Number::New(env, msg.snr));
         result.Set("deltaTime", Napi::Number::New(env, msg.dt));
         result.Set("deltaFrequency", Napi::Number::New(env, msg.freq));
@@ -584,6 +582,23 @@ namespace wsjtx_nodejs
           frequency_(frequency),
           threads_(threads),
           useFloat_(false) {}
+
+    EncodeWorker::EncodeWorker(Napi::Function &callback,
+                                wsjtx_handle_t handle,
+                                wsjtx_encode_fn encode_fn,
+                                wsjtx_get_max_samples_fn get_max_samples_fn,
+                                wsjtxMode mode,
+                                const std::string &message,
+                                int frequency,
+                                int threads)
+        : AsyncWorkerBase(callback),
+          handle_(handle),
+          encode_fn_(encode_fn),
+          get_max_samples_fn_(get_max_samples_fn),
+          mode_(mode),
+          message_(message),
+          frequency_(frequency),
+          threads_(threads) {}
 
     void DecodeWorker::Execute()
     {
@@ -764,7 +779,7 @@ namespace wsjtx_nodejs
                     // Clamp then scale
                     if (v > 1.0f) v = 1.0f;
                     else if (v < -1.0f) v = -1.0f;
-                    intOut_[i] = static_cast<short int>(std::max(-32768, std::min(32767, static_cast<int>(std::lround(v * 32768.0f)))));
+                    intOut_[i] = static_cast<short int>((std::max)(-32768, (std::min)(32767, static_cast<int>(std::lround(v * 32768.0f)))));
                 }
             }
         }

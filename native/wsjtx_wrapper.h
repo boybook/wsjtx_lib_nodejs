@@ -21,11 +21,61 @@
     #define FREE_LIBRARY(handle) dlclose(handle)
 #endif
 
+// 检测MSVC模式（Windows + MSVC编译器）
+#if defined(_WIN32) && defined(_MSC_VER)
+    #define WSJTX_WINDOWS_MSVC_MODE 1
+#else
+    #define WSJTX_WINDOWS_MSVC_MODE 0
+#endif
+
 // 引用bridge API头文件
-#include "wsjtx_bridge.h"
+#include "../wsjtx_bridge/wsjtx_bridge.h"
 
 // 引用C++类型定义（仅用于类型声明，不会链接wsjtx_lib）
+#if !WSJTX_WINDOWS_MSVC_MODE
 #include <wsjtx_lib.h>
+#else
+// MSVC模式下:只使用C bridge类型，避免C++运行时冲突
+// 模式枚举：使用bridge的wsjtx_mode_t，但为兼容性保留enum名
+enum wsjtxMode {
+    FT8 = 0,
+    FT4 = 1,
+    JT4 = 2,
+    JT65 = 3,
+    JT9 = 4,
+    FT2 = 5,
+    WSPR = 6,
+    ECHO = 7,
+    FST4 = 8,
+    Q65 = 9,
+    FST4W = 10
+};
+
+// 使用C bridge类型作为WsjtxMessage（无std::string，安全跨CRT）
+using WsjtxMessage = wsjtx_message_t;
+
+// WSPR相关结构（当前不支持）
+struct decoder_options {
+    int freq;
+    char rcall[13];
+    char rloc[7];
+    int quickmode;
+    int usehashtable;
+    int npasses;
+    int subtraction;
+};
+
+struct decoder_results {
+    double freq;
+    float sync, snr, dt, drift;
+    int jitter;
+    char message[23];
+    char call[13];
+    char loc[7];
+    char pwr[3];
+    int cycles;
+};
+#endif
 
 namespace wsjtx_nodejs {
 
