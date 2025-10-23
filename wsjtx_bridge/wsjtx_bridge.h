@@ -7,7 +7,12 @@
     #define WSJTX_BRIDGE_API __declspec(dllimport)
   #endif
 #else
-  #define WSJTX_BRIDGE_API
+  // Unix (Linux/macOS): 使用 GCC/Clang visibility 属性
+  #ifdef WSJTX_BRIDGE_EXPORTS
+    #define WSJTX_BRIDGE_API __attribute__((visibility("default")))
+  #else
+    #define WSJTX_BRIDGE_API
+  #endif
 #endif
 
 #ifdef __cplusplus

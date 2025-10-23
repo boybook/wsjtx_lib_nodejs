@@ -20,9 +20,15 @@ target_link_libraries(wsjtx_bridge PRIVATE wsjtx_lib)
 # 设置C++标准
 set_property(TARGET wsjtx_bridge PROPERTY CXX_STANDARD 17)
 
-# Windows: 设置导出宏
-if(WIN32)
-    target_compile_definitions(wsjtx_bridge PRIVATE WSJTX_BRIDGE_EXPORTS)
+# 设置导出宏（全平台）
+target_compile_definitions(wsjtx_bridge PRIVATE WSJTX_BRIDGE_EXPORTS)
+
+# 设置符号可见性（Unix平台）
+if(NOT WIN32)
+    set_target_properties(wsjtx_bridge PROPERTIES
+        CXX_VISIBILITY_PRESET default
+        VISIBILITY_INLINES_HIDDEN OFF
+    )
 endif()
 
 # 包含wsjtx_lib头文件
