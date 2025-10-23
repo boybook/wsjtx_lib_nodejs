@@ -508,7 +508,8 @@ jobs:
           ls -la "$TARGET_DIR"
 
           # 计算文件数量（去除空格）
-          BRIDGE_LIBS=$(ls "$TARGET_DIR" | grep -E "\\.(so|dylib)$" | grep -v wsjtx_bridge | wc -l | tr -d ' ')
+          # 修复：去掉$以匹配.so.1, .so.6等Linux共享库文件名
+          BRIDGE_LIBS=$(ls "$TARGET_DIR" | grep -E "\\.(so|dylib)" | grep -v wsjtx_bridge | wc -l | tr -d ' ')
 
           # 获取文件大小（确保是数字或引号包裹的字符串）
           if [ "${{ runner.os }}" = "Linux" ]; then
