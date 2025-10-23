@@ -388,6 +388,11 @@ if(NOT WSJTX_SKIP_LIB_BUILD)
         endforeach()
 
         message(STATUS "wsjtx_bridge.dll will be built with MinGW and linked with wsjtx_lib")
+
+        # MinGW阶段只构建wsjtx_bridge.dll,不构建.node扩展
+        # .node扩展应该在MSVC阶段构建
+        message(STATUS "MinGW stage complete. Skipping .node build (will be built in MSVC stage)")
+        return()
     endif()
 else()
     message(STATUS "Skipping wsjtx_lib build (MSVC mode)")
@@ -396,29 +401,32 @@ endif()
 # Link directories (must be before creating target)
 link_directories(${FFTW3F_LIBRARY_DIRS})
 
+# ==================== 构建 Node.js Addon (.node) ====================
+# 注意: MinGW模式在上面已经return(),不会执行到这里
+# 这部分只在 MSVC 模式或 Linux/macOS 平台执行
+
 # Source files for the Node.js addon
 file(GLOB_RECURSE NATIVE_SOURCES "native/*.cpp" "native/*.h")
 
-# Create the Node.js addon with MinGW-specific handling
-if(WIN32 AND CMAKE_CXX_COMPILER_ID MATCHES "GNU")
-    # MinGW build: exclude Windows delay load hook
-    add_library(${PROJECT_NAME} SHARED 
+# MSVC模式: 排除wsjtx_bridge.cpp (这是MinGW专用的C API桥接层)
+if(WIN32 AND MSVC)
+    list(FILTER NATIVE_SOURCES EXCLUDE REGEX ".*wsjtx_bridge\\.(cpp|h)$")
+    message(STATUS "MSVC mode: excluding wsjtx_bridge.cpp from .node build")
+endif()
+
+# Create the Node.js addon
+# 注意: 此时MinGW模式已经return,只剩MSVC/Linux/macOS执行到这里
+if(CMAKE_JS_SRC)
+    add_library(${PROJECT_NAME} SHARED
+        ${NATIVE_SOURCES}
+        ${CMAKE_JS_SRC}
+    )
+    message(STATUS "Building ${PROJECT_NAME} with CMAKE_JS_SRC (delay-load hook)")
+else()
+    add_library(${PROJECT_NAME} SHARED
         ${NATIVE_SOURCES}
     )
-    message(STATUS "MinGW build: excluding CMAKE_JS_SRC (Windows delay load hook)")
-else()
-    # Other platforms: include CMAKE_JS_SRC if available
-    if(CMAKE_JS_SRC)
-        add_library(${PROJECT_NAME} SHARED 
-            ${NATIVE_SOURCES}
-            ${CMAKE_JS_SRC}
-        )
-        message(STATUS "Non-MinGW build: including CMAKE_JS_SRC for delay-load hook")
-    else()
-        add_library(${PROJECT_NAME} SHARED 
-            ${NATIVE_SOURCES}
-        )
-    endif()
+    message(STATUS "Building ${PROJECT_NAME} without CMAKE_JS_SRC")
 endif()
 
 # Set properties for Node.js addon
@@ -456,33 +464,23 @@ if(UNIX AND NOT APPLE)
     )
 endif()
 
-# 设置 Node.js 和 node-addon-api 头文件路径（仅针对 C++ 目标）
-if(WIN32 AND CMAKE_CXX_COMPILER_ID MATCHES "GNU")
-    # Windows MinGW: 使用 MSYS2 的 Node.js 头文件 + 项目的 node-addon-api
-    target_include_directories(${PROJECT_NAME} PRIVATE 
-        "${CMAKE_JS_INC}"
-        "/mingw64/include/node"
-        "/mingw64/include/node/node"
-        "/mingw64/include"
-        "${NODE_ADDON_API_PATH}"
-    )
-    message(STATUS "MinGW build: using MSYS2 Node.js headers and local node-addon-api")
-    message(STATUS "CMAKE_JS_INC: ${CMAKE_JS_INC}")
-elseif(WIN32 AND MSVC)
-    # Windows MSVC: 使用 cmake-js 头文件 + 项目的 node-addon-api + native目录(用于wsjtx_bridge.h)
+# 设置 Node.js 和 node-addon-api 头文件路径
+# 注意: MinGW模式已经return,这里只处理MSVC和其他平台
+if(WIN32 AND MSVC)
+    # Windows MSVC: 需要包含native目录(用于wsjtx_bridge.h声明)
     target_include_directories(${PROJECT_NAME} PRIVATE
         ${CMAKE_JS_INC}
         "${NODE_ADDON_API_PATH}"
         "${CMAKE_CURRENT_SOURCE_DIR}/native"
     )
-    message(STATUS "MSVC build: using cmake-js headers and native directory for wsjtx_bridge.h")
+    message(STATUS "MSVC build: including native directory for wsjtx_bridge.h")
 else()
-    # 其他平台：使用 cmake-js 提供的头文件路径 + 项目的 node-addon-api
+    # Linux/macOS: 标准配置
     target_include_directories(${PROJECT_NAME} PRIVATE
         ${CMAKE_JS_INC}
         "${NODE_ADDON_API_PATH}"
     )
-    message(STATUS "Using cmake-js provided headers: ${CMAKE_JS_INC}")
+    message(STATUS "Non-Windows build: using standard cmake-js headers")
 endif()
 
 # Compiler-specific options
@@ -496,26 +494,10 @@ target_compile_definitions(${PROJECT_NAME} PRIVATE
 # Add compile flags
 target_compile_options(${PROJECT_NAME} PRIVATE ${FFTW3F_CFLAGS_OTHER})
 
-# Link libraries with MinGW-specific handling
-if(WIN32 AND CMAKE_CXX_COMPILER_ID MATCHES "GNU")
-    # Windows MinGW: 复制库文件到本地目录避免路径问题
-    set(LOCAL_NODE_LIB "${CMAKE_BINARY_DIR}/node.lib")
-    
-    # 检查并复制 Node.js 库文件
-    if(EXISTS "${CMAKE_JS_LIB}")
-        message(STATUS "Copying Node.js library from: ${CMAKE_JS_LIB}")
-        configure_file("${CMAKE_JS_LIB}" "${LOCAL_NODE_LIB}" COPYONLY)
-        target_link_libraries(${PROJECT_NAME} PRIVATE "${LOCAL_NODE_LIB}")
-        message(STATUS "MinGW build: Using copied Node.js library: ${LOCAL_NODE_LIB}")
-    else()
-        message(STATUS "MinGW build: CMAKE_JS_LIB not found, skipping Node.js library linking")
-    endif()
-else()
-    # Other platforms: link CMAKE_JS_LIB if available
-    if(CMAKE_JS_LIB)
-        target_link_libraries(${PROJECT_NAME} PRIVATE ${CMAKE_JS_LIB})
-        message(STATUS "Using cmake-js provided library: ${CMAKE_JS_LIB}")
-    endif()
+# Link Node.js library (MSVC/Linux/macOS only, MinGW已return)
+if(CMAKE_JS_LIB)
+    target_link_libraries(${PROJECT_NAME} PRIVATE ${CMAKE_JS_LIB})
+    message(STATUS "Linking cmake-js library: ${CMAKE_JS_LIB}")
 endif()
 
 # Link libraries based on build mode
@@ -557,17 +539,10 @@ elseif(UNIX)
     # Linux specific linker flags for Node.js extensions
     # Note: We don't use --no-undefined because Node.js extensions
     # have symbols that are resolved at runtime by the Node.js process
-    target_link_options(${PROJECT_NAME} PRIVATE 
+    target_link_options(${PROJECT_NAME} PRIVATE
         -Wl,--as-needed
     )
 elseif(WIN32)
-    # Windows with MinGW-w64 linking
-    target_link_libraries(${PROJECT_NAME} PRIVATE
-        gfortran 
-        gcc_s 
-        pthread
-    )
-    if(FFTW_HAS_THREADS)
-        target_link_libraries(${PROJECT_NAME} PRIVATE fftw3f_threads)
-    endif()
+    # Windows MSVC: 不需要链接Fortran库,会通过wsjtx_bridge.dll动态加载
+    message(STATUS "Windows MSVC: Fortran libraries will be loaded via wsjtx_bridge.dll")
 endif()
