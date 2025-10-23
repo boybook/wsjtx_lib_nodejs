@@ -7,6 +7,10 @@ if(DEFINED CMAKE_TOOLCHAIN_FILE AND CMAKE_TOOLCHAIN_FILE MATCHES "vcpkg")
     message(STATUS "Detected vcpkg toolchain, disabling manifest mode")
 endif()
 
+# 构建选项（用于Windows两阶段构建）
+option(WSJTX_BUILD_LIBS "Build wsjtx_lib and wsjtx_bridge" ON)
+option(WSJTX_BUILD_NODE_ADDON "Build Node.js addon (.node)" ON)
+
 # 初始化项目
 project(wsjtx_lib_nodejs LANGUAGES C CXX)
 
@@ -106,44 +110,46 @@ else()
     find_package(Boost REQUIRED)
 endif()
 
-# pkg-config 和 FFTW3
-find_package(PkgConfig REQUIRED)
-pkg_check_modules(FFTW3F REQUIRED fftw3f)
+# pkg-config 和 FFTW3（仅在构建库时需要）
+if(WSJTX_BUILD_LIBS)
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(FFTW3F REQUIRED fftw3f)
 
-# FFTW3 threads support
-if(UNIX AND NOT APPLE)
-    # Linux
-    find_library(FFTW3F_THREADS_LIB
-        NAMES fftw3f_threads
-        PATHS /usr/lib /usr/local/lib /usr/lib/x86_64-linux-gnu /usr/lib/aarch64-linux-gnu
-    )
-elseif(APPLE)
-    # macOS
-    find_library(FFTW3F_THREADS_LIB
-        NAMES fftw3f_threads
-        PATHS /opt/homebrew/lib /usr/local/lib
-        NO_DEFAULT_PATH
-    )
-elseif(WIN32 AND NOT MSVC)
-    # Windows MinGW
-    execute_process(
-        COMMAND pkg-config --exists fftw3f
-        RESULT_VARIABLE PKG_CONFIG_FFTW_RESULT
-        OUTPUT_QUIET ERROR_QUIET
-    )
-    if(PKG_CONFIG_FFTW_RESULT EQUAL 0)
-        set(FFTW3F_THREADS_LIB "fftw3f_threads")
+    # FFTW3 threads support
+    if(UNIX AND NOT APPLE)
+        # Linux
+        find_library(FFTW3F_THREADS_LIB
+            NAMES fftw3f_threads
+            PATHS /usr/lib /usr/local/lib /usr/lib/x86_64-linux-gnu /usr/lib/aarch64-linux-gnu
+        )
+    elseif(APPLE)
+        # macOS
+        find_library(FFTW3F_THREADS_LIB
+            NAMES fftw3f_threads
+            PATHS /opt/homebrew/lib /usr/local/lib
+            NO_DEFAULT_PATH
+        )
+    elseif(WIN32 AND NOT MSVC)
+        # Windows MinGW
+        execute_process(
+            COMMAND pkg-config --exists fftw3f
+            RESULT_VARIABLE PKG_CONFIG_FFTW_RESULT
+            OUTPUT_QUIET ERROR_QUIET
+        )
+        if(PKG_CONFIG_FFTW_RESULT EQUAL 0)
+            set(FFTW3F_THREADS_LIB "fftw3f_threads")
+        endif()
     endif()
-endif()
 
-if(FFTW3F_THREADS_LIB)
-    message(STATUS "FFTW3 with threads: ${FFTW3F_THREADS_LIB}")
-    set(FFTW_THREADS_LIBRARIES fftw3f_threads)
-    set(FFTW_HAS_THREADS TRUE)
-else()
-    message(STATUS "FFTW3 threads not found, using single-threaded")
-    set(FFTW_THREADS_LIBRARIES "")
-    set(FFTW_HAS_THREADS FALSE)
+    if(FFTW3F_THREADS_LIB)
+        message(STATUS "FFTW3 with threads: ${FFTW3F_THREADS_LIB}")
+        set(FFTW_THREADS_LIBRARIES fftw3f_threads)
+        set(FFTW_HAS_THREADS TRUE)
+    else()
+        message(STATUS "FFTW3 threads not found, using single-threaded")
+        set(FFTW_THREADS_LIBRARIES "")
+        set(FFTW_HAS_THREADS FALSE)
+    endif()
 endif()
 
 # node-addon-api
@@ -244,113 +250,123 @@ elseif(WIN32 AND NOT MSVC)
     )
 endif()
 
-# ==================== 构建wsjtx_lib ====================
+# ==================== 构建wsjtx_lib 和 wsjtx_bridge ====================
 
-# 启用Fortran
-enable_language(Fortran)
-message(STATUS "Fortran compiler enabled")
+if(WSJTX_BUILD_LIBS)
+    message(STATUS "=== Building wsjtx_lib and wsjtx_bridge ===")
 
-# Linux Fortran flags
-if(UNIX AND NOT APPLE)
-    set(CMAKE_Fortran_FLAGS "${CMAKE_Fortran_FLAGS} -fPIC")
+    # 启用Fortran
+    enable_language(Fortran)
+    message(STATUS "Fortran compiler enabled")
+
+    # Linux Fortran flags
+    if(UNIX AND NOT APPLE)
+        set(CMAKE_Fortran_FLAGS "${CMAKE_Fortran_FLAGS} -fPIC")
+    endif()
+
+    # Link directories
+    link_directories(${FFTW3F_LIBRARY_DIRS})
+
+    # 添加wsjtx_lib子目录
+    add_subdirectory(wsjtx_lib)
+
+    # 添加wsjtx_bridge子目录
+    add_subdirectory(wsjtx_bridge)
+else()
+    message(STATUS "=== Skipping wsjtx_lib and wsjtx_bridge (WSJTX_BUILD_LIBS=OFF) ===")
 endif()
-
-# Link directories
-link_directories(${FFTW3F_LIBRARY_DIRS})
-
-# 添加wsjtx_lib子目录
-add_subdirectory(wsjtx_lib)
-
-# ==================== 构建wsjtx_bridge ====================
-
-# 添加wsjtx_bridge子目录
-add_subdirectory(wsjtx_bridge)
 
 # ==================== 构建 Node.js Addon (.node) ====================
 
-message(STATUS "=== Building Node.js addon (.node) ===")
+if(WSJTX_BUILD_NODE_ADDON)
+    message(STATUS "=== Building Node.js addon (.node) ===")
 
-# 源文件（排除bridge文件，已移动到wsjtx_bridge/）
-file(GLOB_RECURSE NATIVE_SOURCES "native/*.cpp" "native/*.h")
+    # 源文件（排除bridge文件，已移动到wsjtx_bridge/）
+    file(GLOB_RECURSE NATIVE_SOURCES "native/*.cpp" "native/*.h")
 
-# 创建Node.js addon
-if(CMAKE_JS_SRC)
-    add_library(${PROJECT_NAME} SHARED
-        ${NATIVE_SOURCES}
-        ${CMAKE_JS_SRC}
+    # 创建Node.js addon
+    if(CMAKE_JS_SRC)
+        add_library(${PROJECT_NAME} SHARED
+            ${NATIVE_SOURCES}
+            ${CMAKE_JS_SRC}
+        )
+    else()
+        add_library(${PROJECT_NAME} SHARED
+            ${NATIVE_SOURCES}
+        )
+    endif()
+
+    # 设置属性
+    set_target_properties(${PROJECT_NAME} PROPERTIES
+        PREFIX ""
+        SUFFIX ".node"
+        CXX_VISIBILITY_PRESET hidden
+        POSITION_INDEPENDENT_CODE ON
     )
+
+    # 输出目录
+    set_target_properties(${PROJECT_NAME} PROPERTIES
+        LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/Release"
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/Release"
+        ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/Release"
+    )
+
+    # 多配置生成器
+    foreach(cfg Debug Release RelWithDebInfo MinSizeRel)
+        string(TOUPPER ${cfg} CFG_UPPER)
+        set_target_properties(${PROJECT_NAME} PROPERTIES
+            LIBRARY_OUTPUT_DIRECTORY_${CFG_UPPER} "${CMAKE_BINARY_DIR}/${cfg}"
+            RUNTIME_OUTPUT_DIRECTORY_${CFG_UPPER} "${CMAKE_BINARY_DIR}/${cfg}"
+            ARCHIVE_OUTPUT_DIRECTORY_${CFG_UPPER} "${CMAKE_BINARY_DIR}/${cfg}"
+        )
+    endforeach()
+
+    # RPATH设置
+    if(UNIX AND NOT APPLE)
+        set_target_properties(${PROJECT_NAME} PROPERTIES
+            BUILD_RPATH "\$ORIGIN"
+            INSTALL_RPATH "\$ORIGIN"
+        )
+    elseif(APPLE)
+        set_target_properties(${PROJECT_NAME} PROPERTIES
+            BUILD_RPATH "@loader_path"
+            INSTALL_RPATH "@loader_path"
+        )
+    endif()
+
+    # Include directories
+    target_include_directories(${PROJECT_NAME} PRIVATE
+        ${CMAKE_JS_INC}
+        "${NODE_ADDON_API_PATH}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/native"
+        "${CMAKE_CURRENT_SOURCE_DIR}/wsjtx_bridge"
+    )
+
+    # 编译定义
+    target_compile_definitions(${PROJECT_NAME} PRIVATE
+        NAPI_DISABLE_CPP_EXCEPTIONS
+        BUILDING_NODE_EXTENSION
+        NAPI_VERSION=4
+        NODE_GYP_MODULE_NAME=${PROJECT_NAME}
+    )
+
+    # 编译选项（跳过FFTW相关，因为.node不直接链接FFTW）
+    if(WSJTX_BUILD_LIBS AND FFTW3F_CFLAGS_OTHER)
+        target_compile_options(${PROJECT_NAME} PRIVATE ${FFTW3F_CFLAGS_OTHER})
+    endif()
+
+    # 链接Node.js库
+    if(CMAKE_JS_LIB)
+        target_link_libraries(${PROJECT_NAME} PRIVATE ${CMAKE_JS_LIB})
+    endif()
+
+    # 链接库（仅链接Boost，运行时动态加载wsjtx_bridge）
+    target_link_libraries(${PROJECT_NAME} PRIVATE
+        ${BOOST_LIBRARIES}
+    )
+
+    message(STATUS ".node extension will dynamically load wsjtx_bridge at runtime")
+    message(STATUS "Build complete: wsjtx_lib (static) -> wsjtx_bridge (dynamic) -> .node (loads bridge)")
 else()
-    add_library(${PROJECT_NAME} SHARED
-        ${NATIVE_SOURCES}
-    )
+    message(STATUS "=== Skipping Node.js addon (.node) (WSJTX_BUILD_NODE_ADDON=OFF) ===")
 endif()
-
-# 设置属性
-set_target_properties(${PROJECT_NAME} PROPERTIES
-    PREFIX ""
-    SUFFIX ".node"
-    CXX_VISIBILITY_PRESET hidden
-    POSITION_INDEPENDENT_CODE ON
-)
-
-# 输出目录
-set_target_properties(${PROJECT_NAME} PROPERTIES
-    LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/Release"
-    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/Release"
-    ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/Release"
-)
-
-# 多配置生成器
-foreach(cfg Debug Release RelWithDebInfo MinSizeRel)
-    string(TOUPPER ${cfg} CFG_UPPER)
-    set_target_properties(${PROJECT_NAME} PROPERTIES
-        LIBRARY_OUTPUT_DIRECTORY_${CFG_UPPER} "${CMAKE_BINARY_DIR}/${cfg}"
-        RUNTIME_OUTPUT_DIRECTORY_${CFG_UPPER} "${CMAKE_BINARY_DIR}/${cfg}"
-        ARCHIVE_OUTPUT_DIRECTORY_${CFG_UPPER} "${CMAKE_BINARY_DIR}/${cfg}"
-    )
-endforeach()
-
-# RPATH设置
-if(UNIX AND NOT APPLE)
-    set_target_properties(${PROJECT_NAME} PROPERTIES
-        BUILD_RPATH "\$ORIGIN"
-        INSTALL_RPATH "\$ORIGIN"
-    )
-elseif(APPLE)
-    set_target_properties(${PROJECT_NAME} PROPERTIES
-        BUILD_RPATH "@loader_path"
-        INSTALL_RPATH "@loader_path"
-    )
-endif()
-
-# Include directories
-target_include_directories(${PROJECT_NAME} PRIVATE
-    ${CMAKE_JS_INC}
-    "${NODE_ADDON_API_PATH}"
-    "${CMAKE_CURRENT_SOURCE_DIR}/native"
-    "${CMAKE_CURRENT_SOURCE_DIR}/wsjtx_bridge"
-)
-
-# 编译定义
-target_compile_definitions(${PROJECT_NAME} PRIVATE
-    NAPI_DISABLE_CPP_EXCEPTIONS
-    BUILDING_NODE_EXTENSION
-    NAPI_VERSION=4
-    NODE_GYP_MODULE_NAME=${PROJECT_NAME}
-)
-
-# 编译选项
-target_compile_options(${PROJECT_NAME} PRIVATE ${FFTW3F_CFLAGS_OTHER})
-
-# 链接Node.js库
-if(CMAKE_JS_LIB)
-    target_link_libraries(${PROJECT_NAME} PRIVATE ${CMAKE_JS_LIB})
-endif()
-
-# 链接库（仅链接Boost，运行时动态加载wsjtx_bridge）
-target_link_libraries(${PROJECT_NAME} PRIVATE
-    ${BOOST_LIBRARIES}
-)
-
-message(STATUS ".node extension will dynamically load wsjtx_bridge at runtime")
-message(STATUS "Build complete: wsjtx_lib (static) -> wsjtx_bridge (dynamic) -> .node (loads bridge)")

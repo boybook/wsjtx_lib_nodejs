@@ -207,54 +207,86 @@ jobs:
           # 新架构: wsjtx_lib (static) -> wsjtx_bridge (dynamic) -> .node (loads bridge)
           npx cmake-js compile --arch=${{ matrix.cmake_arch }}
 
-      # 8. Windows构建 - 统一使用MinGW（简化后的单阶段构建）
-      - name: Build native module (Windows/MinGW)
+      # 8a. Windows构建 - 第一步：MinGW构建wsjtx_lib和wsjtx_bridge.dll
+      - name: Build wsjtx_bridge.dll (Windows/MinGW)
         if: runner.os == 'Windows'
         shell: msys2 {0}
         run: |
-          echo "=== Building with MinGW (unified architecture) ==="
-          echo "New build flow: wsjtx_lib -> wsjtx_bridge.dll -> .node"
+          echo "=== Step 1: Building wsjtx_lib + wsjtx_bridge.dll with MinGW ==="
+          echo "Architecture: wsjtx_lib (static) + wsjtx_bridge.dll (dynamic)"
 
           # 清理之前的构建
-          rm -rf build/
+          rm -rf build_mingw/
+          mkdir -p build_mingw
+          cd build_mingw
 
-          # 使用cmake-js进行完整构建（MinGW工具链）
-          npx cmake-js compile --arch=x64 \
-                               --CDCMAKE_BUILD_TYPE=Release \
-                               --CDCMAKE_C_COMPILER=gcc \
-                               --CDCMAKE_CXX_COMPILER=g++ \
-                               --CDCMAKE_Fortran_COMPILER=gfortran \
-                               --CDCMAKE_PREFIX_PATH=/mingw64 \
-                               --CDPKG_CONFIG_EXECUTABLE=/mingw64/bin/pkg-config
+          # 使用CMake直接构建（MinGW Makefiles generator）
+          cmake .. \
+            -G "MinGW Makefiles" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER=gcc \
+            -DCMAKE_CXX_COMPILER=g++ \
+            -DCMAKE_Fortran_COMPILER=gfortran \
+            -DCMAKE_PREFIX_PATH=/mingw64 \
+            -DPKG_CONFIG_EXECUTABLE=/mingw64/bin/pkg-config \
+            -DWSJTX_BUILD_LIBS=ON \
+            -DWSJTX_BUILD_NODE_ADDON=OFF
+
+          # 构建
+          cmake --build . --config Release
 
           # 验证构建产物
           echo ""
-          echo "🔍 Verifying build artifacts..."
-          if [ ! -f "build/Release/wsjtx_bridge.dll" ]; then
+          echo "🔍 Verifying MinGW build artifacts..."
+          if [ ! -f "Release/wsjtx_bridge.dll" ]; then
             echo "❌ Error: wsjtx_bridge.dll not found!"
-            ls -la build/Release/ || ls -la build/
+            find . -name "wsjtx_bridge.dll" -o -name "libwsjtx_bridge.*"
             exit 1
           fi
 
-          if [ ! -f "build/Release/wsjtx_lib_nodejs.node" ]; then
-            echo "❌ Error: wsjtx_lib_nodejs.node not found!"
-            ls -la build/Release/ || ls -la build/
-            exit 1
-          fi
+          echo "✅ wsjtx_bridge.dll built successfully"
+          ls -lh Release/wsjtx_bridge.dll
 
-          echo "✅ All build artifacts generated successfully"
-          ls -lh build/Release/
+          cd ..
 
-          # 创建prebuilds目录并复制所有必需文件
-          echo ""
-          echo "📦 Packaging prebuilt binaries..."
+      # 8b. Windows构建 - 第二步：MSVC构建.node扩展
+      - name: Build .node extension (Windows/MSVC)
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: |
+          echo === Step 2: Building .node extension with MSVC ===
+          echo Architecture: .node (loads wsjtx_bridge.dll at runtime)
+
+          REM 使用cmake-js构建.node（自动使用Visual Studio）
+          npx cmake-js compile --arch=x64 --CDWSJTX_BUILD_LIBS=OFF --CDWSJTX_BUILD_NODE_ADDON=ON
+
+          REM 验证构建产物
+          echo.
+          echo Verifying MSVC build artifacts...
+          if not exist "build\Release\wsjtx_lib_nodejs.node" (
+            echo Error: wsjtx_lib_nodejs.node not found!
+            dir /s /b build\*.node
+            exit /b 1
+          )
+
+          echo All build artifacts generated successfully
+          dir build\Release\*.node
+
+      # 8c. Windows打包 - 复制所有必需文件
+      - name: Package Windows binaries
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: |
+          echo "📦 Packaging Windows prebuilt binaries..."
           mkdir -p prebuilds/win32-x64
 
-          # 复制.node扩展
+          # 复制.node扩展（MSVC构建）
           cp build/Release/wsjtx_lib_nodejs.node prebuilds/win32-x64/
+          echo "✅ Copied .node extension (MSVC)"
 
-          # 复制bridge动态库
-          cp build/Release/wsjtx_bridge.dll prebuilds/win32-x64/
+          # 复制wsjtx_bridge.dll（MinGW构建）
+          cp build_mingw/Release/wsjtx_bridge.dll prebuilds/win32-x64/
+          echo "✅ Copied wsjtx_bridge.dll (MinGW)"
 
           # 复制MinGW运行时依赖
           echo "📦 Copying MinGW runtime dependencies..."
@@ -475,10 +507,17 @@ jobs:
           echo "📁 构建完成的文件:"
           ls -la "$TARGET_DIR"
 
-          # 计算文件数量
-          BRIDGE_LIBS=$(ls "$TARGET_DIR" | grep -E "\\.(so|dylib)$" | grep -v wsjtx_bridge | wc -l)
-          NODE_SIZE=$(stat -c%s "$TARGET_DIR"/*.node 2>/dev/null || stat -f%z "$TARGET_DIR"/*.node 2>/dev/null || echo "unknown")
-          BRIDGE_SIZE=$(stat -c%s "$TARGET_DIR"/wsjtx_bridge.* 2>/dev/null || stat -f%z "$TARGET_DIR"/wsjtx_bridge.* 2>/dev/null || echo "unknown")
+          # 计算文件数量（去除空格）
+          BRIDGE_LIBS=$(ls "$TARGET_DIR" | grep -E "\\.(so|dylib)$" | grep -v wsjtx_bridge | wc -l | tr -d ' ')
+
+          # 获取文件大小（确保是数字或引号包裹的字符串）
+          if [ "${{ runner.os }}" = "Linux" ]; then
+            NODE_SIZE=$(stat -c%s "$TARGET_DIR"/*.node 2>/dev/null || echo "0")
+            BRIDGE_SIZE=$(stat -c%s "$TARGET_DIR"/wsjtx_bridge.* 2>/dev/null || echo "0")
+          else
+            NODE_SIZE=$(stat -f%z "$TARGET_DIR"/*.node 2>/dev/null || echo "0")
+            BRIDGE_SIZE=$(stat -f%z "$TARGET_DIR"/wsjtx_bridge.* 2>/dev/null || echo "0")
+          fi
 
           # 创建构建信息文件
           cat > "$TARGET_DIR/build-info.json" << EOF
