@@ -196,56 +196,65 @@ jobs:
               exit 1
           fi
 
-      # 7. 构建原生模块 - Linux/macOS
+      # 7. 构建原生模块 - 统一流程（所有平台）
       - name: Build native module (Linux/macOS)
         if: runner.os != 'Windows'
         run: |
           # 清理可能存在的CMake缓存
           rm -rf build/
-          
+
           # 原生编译（支持所有架构）
+          # 新架构: wsjtx_lib (static) -> wsjtx_bridge (dynamic) -> .node (loads bridge)
           npx cmake-js compile --arch=${{ matrix.cmake_arch }}
 
-      # 8a. Windows步骤1: 使用MinGW编译wsjtx_bridge.dll
-      - name: Build wsjtx_bridge.dll with MinGW (Windows Step 1/2)
+      # 8. Windows构建 - 统一使用MinGW（简化后的单阶段构建）
+      - name: Build native module (Windows/MinGW)
         if: runner.os == 'Windows'
         shell: msys2 {0}
         run: |
-          echo "=== Step 1: Building wsjtx_bridge.dll with MinGW ==="
+          echo "=== Building with MinGW (unified architecture) ==="
+          echo "New build flow: wsjtx_lib -> wsjtx_bridge.dll -> .node"
 
           # 清理之前的构建
-          rm -rf build-mingw
+          rm -rf build/
 
-          # 在主项目目录创建MinGW构建
-          mkdir -p build-mingw && cd build-mingw
+          # 使用cmake-js进行完整构建（MinGW工具链）
+          npx cmake-js compile --arch=x64 \
+                               --CDCMAKE_BUILD_TYPE=Release \
+                               --CDCMAKE_C_COMPILER=gcc \
+                               --CDCMAKE_CXX_COMPILER=g++ \
+                               --CDCMAKE_Fortran_COMPILER=gfortran \
+                               --CDCMAKE_PREFIX_PATH=/mingw64 \
+                               --CDPKG_CONFIG_EXECUTABLE=/mingw64/bin/pkg-config
 
-          # 配置CMake生成MinGW Makefiles (构建wsjtx_lib静态库和wsjtx_bridge.dll)
-          cmake .. -G "MinGW Makefiles" \
-                   -DCMAKE_BUILD_TYPE=Release \
-                   -DCMAKE_C_COMPILER=gcc \
-                   -DCMAKE_CXX_COMPILER=g++ \
-                   -DCMAKE_Fortran_COMPILER=gfortran \
-                   -DCMAKE_PREFIX_PATH=/mingw64 \
-                   -DPKG_CONFIG_EXECUTABLE=/mingw64/bin/pkg-config
-
-          # 编译
-          cmake --build . --config Release --verbose
-
-          # 验证DLL生成
-          if [ ! -f "Release/wsjtx_bridge.dll" ]; then
+          # 验证构建产物
+          echo ""
+          echo "🔍 Verifying build artifacts..."
+          if [ ! -f "build/Release/wsjtx_bridge.dll" ]; then
             echo "❌ Error: wsjtx_bridge.dll not found!"
-            echo "Build directory contents:"
-            ls -la Release/
+            ls -la build/Release/ || ls -la build/
             exit 1
           fi
 
-          echo "✅ wsjtx_bridge.dll built successfully"
-          ls -la Release/wsjtx_bridge.dll
+          if [ ! -f "build/Release/wsjtx_lib_nodejs.node" ]; then
+            echo "❌ Error: wsjtx_lib_nodejs.node not found!"
+            ls -la build/Release/ || ls -la build/
+            exit 1
+          fi
 
-          # 创建prebuilds目录并复制DLL
-          cd ..
+          echo "✅ All build artifacts generated successfully"
+          ls -lh build/Release/
+
+          # 创建prebuilds目录并复制所有必需文件
+          echo ""
+          echo "📦 Packaging prebuilt binaries..."
           mkdir -p prebuilds/win32-x64
-          cp build-mingw/Release/wsjtx_bridge.dll prebuilds/win32-x64/
+
+          # 复制.node扩展
+          cp build/Release/wsjtx_lib_nodejs.node prebuilds/win32-x64/
+
+          # 复制bridge动态库
+          cp build/Release/wsjtx_bridge.dll prebuilds/win32-x64/
 
           # 复制MinGW运行时依赖
           echo "📦 Copying MinGW runtime dependencies..."
@@ -255,64 +264,33 @@ jobs:
           cp /mingw64/bin/libstdc++-6.dll prebuilds/win32-x64/
           cp /mingw64/bin/libwinpthread-1.dll prebuilds/win32-x64/
 
-          echo "✅ wsjtx_bridge.dll and dependencies copied to prebuilds/"
-          ls -la prebuilds/win32-x64/
+          echo ""
+          echo "✅ Packaging complete"
+          ls -lh prebuilds/win32-x64/
 
-      # 8b. Windows步骤2: 使用MSVC编译native扩展
-      - name: Build native extension with MSVC (Windows Step 2/2)
-        if: runner.os == 'Windows'
-        shell: cmd
-        run: |
-          echo === Step 2: Building native extension with MSVC ===
-
-          REM 初始化MSVC环境
-          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
-
-          REM 清理之前的构建
-          if exist build rmdir /s /q build
-
-          REM 使用cmake-js编译(将自动检测MSVC)
-          npx cmake-js compile --arch=x64 --CDCMAKE_BUILD_TYPE=Release
-
-          REM 验证.node文件生成
-          if not exist "build\Release\wsjtx_lib_nodejs.node" (
-            echo ❌ Error: wsjtx_lib_nodejs.node not found!
-            exit /b 1
-          )
-
-          echo ✅ wsjtx_lib_nodejs.node built successfully
-          dir build\Release\wsjtx_lib_nodejs.node
-
-          REM 复制到prebuilds
-          copy build\Release\wsjtx_lib_nodejs.node prebuilds\win32-x64\
-
-          echo ✅ Build完成！
-          dir prebuilds\win32-x64\
-
-      # 8c. 验证Windows构建产物
+      # 9. 验证Windows构建产物
       - name: Verify Windows build artifacts
         if: runner.os == 'Windows'
-        shell: cmd
+        shell: msys2 {0}
         run: |
-          echo === Verifying build artifacts ===
+          echo "=== Verifying build artifacts ==="
 
-          REM 检查wsjtx_lib_nodejs.node (MSVC)
-          dumpbin /dependents prebuilds\win32-x64\wsjtx_lib_nodejs.node
-          echo.
-          echo Expected: Should link to vcruntime140.dll (MSVC CRT)
-          echo.
+          # 检查.node扩展的依赖
+          echo "📋 Dependencies of wsjtx_lib_nodejs.node:"
+          objdump -p prebuilds/win32-x64/wsjtx_lib_nodejs.node | grep "DLL Name"
+          echo ""
 
-          REM 检查wsjtx_bridge.dll (MinGW)
-          dumpbin /dependents prebuilds\win32-x64\wsjtx_bridge.dll
-          echo.
-          echo Expected: Should link to MinGW runtime DLLs
-          echo.
+          # 检查wsjtx_bridge.dll的依赖
+          echo "📋 Dependencies of wsjtx_bridge.dll:"
+          objdump -p prebuilds/win32-x64/wsjtx_bridge.dll | grep "DLL Name"
+          echo ""
 
-          REM 检查导出的C接口
-          dumpbin /exports prebuilds\win32-x64\wsjtx_bridge.dll | findstr wsjtx_
-          echo.
+          # 检查导出的C接口
+          echo "📋 Exported functions from wsjtx_bridge.dll:"
+          objdump -p prebuilds/win32-x64/wsjtx_bridge.dll | grep "wsjtx_"
+          echo ""
 
-          echo ✅ Verification complete
+          echo "✅ Verification complete"
 
       # 10. 运行测试 - Linux/macOS
       - name: Run tests (Linux/macOS)
@@ -381,25 +359,40 @@ jobs:
             windows-latest) PLATFORM_NAME="win32" ;;
             *) PLATFORM_NAME="${{ matrix.os }}" ;;
           esac
-          
+
           # 创建目标目录
           TARGET_DIR="prebuilds/$PLATFORM_NAME-${{ matrix.arch }}"
           echo "📁 Creating target directory: $TARGET_DIR"
-          echo "   • GitHub runner: ${{ matrix.os }}"  
+          echo "   • GitHub runner: ${{ matrix.os }}"
           echo "   • Node.js platform: $PLATFORM_NAME"
           echo "   • Architecture: ${{ matrix.arch }}"
+          echo "   • New architecture: wsjtx_lib (static) -> wsjtx_bridge (dynamic) -> .node (loads bridge)"
           mkdir -p "$TARGET_DIR"
-          
-          # 复制构建的 .node 文件（统一来自 build/Release）
+
+          # 复制构建的 .node 文件
           if [ -f "build/Release/wsjtx_lib_nodejs.node" ]; then
             cp build/Release/wsjtx_lib_nodejs.node "$TARGET_DIR/"
-            echo "Copied from build/Release/"
-            # 重要: NODE_FILE 必须指向目标目录中的文件,这样 dylibbundler 才会修改正确的文件
+            echo "✅ Copied .node extension from build/Release/"
             NODE_FILE="$TARGET_DIR/wsjtx_lib_nodejs.node"
           else
             echo "❌ Native module not found for packaging at build/Release!"
-            echo "当前 build 目录结构："
             find build -maxdepth 2 -type f -name "*.node" -print || true
+            exit 1
+          fi
+
+          # 复制bridge动态库（新架构的关键组件！）
+          if [ "${{ runner.os }}" = "Linux" ]; then
+            BRIDGE_LIB="build/Release/wsjtx_bridge.so"
+          elif [ "${{ runner.os }}" = "macOS" ]; then
+            BRIDGE_LIB="build/Release/wsjtx_bridge.dylib"
+          fi
+
+          if [ -f "$BRIDGE_LIB" ]; then
+            cp "$BRIDGE_LIB" "$TARGET_DIR/"
+            echo "✅ Copied bridge library: $(basename $BRIDGE_LIB)"
+            BRIDGE_FILE="$TARGET_DIR/$(basename $BRIDGE_LIB)"
+          else
+            echo "❌ Bridge library not found: $BRIDGE_LIB"
             exit 1
           fi
           
@@ -440,7 +433,7 @@ jobs:
                 SP_ARGS="$SP_ARGS -s $p"
               fi
             done
-            # 动态加入 Cellar 路径，避免某些环境下找不到实际文件
+            # 动态加入 Cellar 路径
             BREW_PREFIX=$(brew --prefix 2>/dev/null || echo "/opt/homebrew")
             for p in "$BREW_PREFIX/Cellar/fftw"/*/lib "$BREW_PREFIX/Cellar/gcc"/*/lib/gcc/current; do
               if [ -d "$p" ]; then
@@ -448,23 +441,30 @@ jobs:
               fi
             done
 
-            # 将依赖库与 .node 放在同级目录,避免嵌套路径问题
-            # 注意: -od 会清空目标目录,但 .node 已经复制到 TARGET_DIR,dylibbundler 不会删除它
-            # 使用 -b 启用实际复制
+            # 处理.node扩展的依赖
+            echo "📦 Bundling dependencies for .node extension..."
             dylibbundler -x "$NODE_FILE" -d "$TARGET_DIR" -p "@loader_path/" $SP_ARGS -b
+
+            # 处理wsjtx_bridge.dylib的依赖
+            echo "📦 Bundling dependencies for wsjtx_bridge.dylib..."
+            dylibbundler -x "$BRIDGE_FILE" -d "$TARGET_DIR" -p "@loader_path/" $SP_ARGS -b
 
             echo ""
             echo "📁 Bundled dylibs in $TARGET_DIR:"
-            ls -la "$TARGET_DIR"/*.dylib 2>/dev/null || echo "No dylib files found"
+            ls -la "$TARGET_DIR"/*.dylib 2>/dev/null || echo "No additional dylib files found"
 
             echo ""
-            echo "🔎 Final otool -L of packaged .node file ($NODE_FILE):"
+            echo "🔎 Final otool -L of .node file:"
             otool -L "$NODE_FILE"
 
             echo ""
-            echo "🔍 Verifying all dylib paths are relative:"
-            if otool -L "$NODE_FILE" | grep -E '^\s+(/opt/homebrew|/usr/local)'; then
-              echo "❌ ERROR: Found absolute Homebrew paths in final binary!"
+            echo "🔎 Final otool -L of wsjtx_bridge.dylib:"
+            otool -L "$BRIDGE_FILE"
+
+            echo ""
+            echo "🔍 Verifying all dylib paths are relative..."
+            if otool -L "$NODE_FILE" "$BRIDGE_FILE" | grep -E '^\s+(/opt/homebrew|/usr/local)'; then
+              echo "❌ ERROR: Found absolute Homebrew paths in final binaries!"
               exit 1
             else
               echo "✅ All dependency paths are relative"
@@ -474,7 +474,12 @@ jobs:
           # 显示构建结果
           echo "📁 构建完成的文件:"
           ls -la "$TARGET_DIR"
-          
+
+          # 计算文件数量
+          BRIDGE_LIBS=$(ls "$TARGET_DIR" | grep -E "\\.(so|dylib)$" | grep -v wsjtx_bridge | wc -l)
+          NODE_SIZE=$(stat -c%s "$TARGET_DIR"/*.node 2>/dev/null || stat -f%z "$TARGET_DIR"/*.node 2>/dev/null || echo "unknown")
+          BRIDGE_SIZE=$(stat -c%s "$TARGET_DIR"/wsjtx_bridge.* 2>/dev/null || stat -f%z "$TARGET_DIR"/wsjtx_bridge.* 2>/dev/null || echo "unknown")
+
           # 创建构建信息文件
           cat > "$TARGET_DIR/build-info.json" << EOF
           {
@@ -484,8 +489,11 @@ jobs:
             "node_version": "${{ env.NODE_VERSION }}",
             "build_time": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
             "cmake_arch": "${{ matrix.cmake_arch }}",
-            "file_size": $(stat -c%s "$TARGET_DIR"/*.node 2>/dev/null || stat -f%z "$TARGET_DIR"/*.node 2>/dev/null || echo "unknown"),
-            "bundled_libraries": $(ls "$TARGET_DIR" | grep -E "\\.(so|dylib)$" | wc -l)
+            "architecture": "unified_bridge",
+            "node_file_size": $NODE_SIZE,
+            "bridge_file_size": $BRIDGE_SIZE,
+            "bundled_libraries": $BRIDGE_LIBS,
+            "build_flow": "wsjtx_lib (static) -> wsjtx_bridge (dynamic) -> .node (loads bridge)"
           }
           EOF
           
@@ -534,6 +542,9 @@ jobs:
             fi
           done
 
+          # 获取wsjtx_bridge.dll大小
+          bridge_size=$(stat -c%s "$TARGET_DIR/wsjtx_bridge.dll")
+
           # 创建构建信息
           cat > "$TARGET_DIR/build-info.json" << EOF
           {
@@ -542,13 +553,14 @@ jobs:
             "arch": "${{ matrix.arch }}",
             "node_version": "${{ env.NODE_VERSION }}",
             "build_time": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-            "build_mode": "msvc_mingw_separated",
-            "node_extension": "msvc",
-            "wsjtx_lib_dll": "mingw",
-            "file_size": $node_size,
+            "architecture": "unified_bridge",
+            "build_mode": "mingw",
+            "node_file_size": $node_size,
+            "bridge_file_size": $bridge_size,
             "bundled_dlls_count": $dll_count,
             "total_package_size": $total_size,
-            "bundled_dlls": [$bundled_dll_list]
+            "bundled_dlls": [$bundled_dll_list],
+            "build_flow": "wsjtx_lib (static) -> wsjtx_bridge.dll (dynamic) -> .node (loads bridge)"
           }
           EOF
 

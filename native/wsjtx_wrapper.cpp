@@ -102,7 +102,6 @@ namespace wsjtx_nodejs
 
     WSJTXLibWrapper::WSJTXLibWrapper(const Napi::CallbackInfo &info)
         : Napi::ObjectWrap<WSJTXLibWrapper>(info)
-#if WSJTX_WINDOWS_MSVC_MODE
         , dll_handle_(nullptr)
         , lib_handle_(nullptr)
         , wsjtx_create_(nullptr)
@@ -112,13 +111,8 @@ namespace wsjtx_nodejs
         , wsjtx_encode_(nullptr)
         , wsjtx_get_sample_rate_(nullptr)
         , wsjtx_get_max_samples_(nullptr)
-#endif
     {
-#if WSJTX_WINDOWS_MSVC_MODE
-        LoadDLL();
-#else
-        lib_ = std::make_unique<wsjtx_lib>();
-#endif
+        LoadBridge();
     }
 
     // Decode method - supports Float32Array and Int16Array audio data
@@ -171,24 +165,16 @@ namespace wsjtx_nodejs
             {
                 // Float32Array
                 auto floatData = ConvertToFloatArray(env, audioData);
-#if WSJTX_WINDOWS_MSVC_MODE
                 auto worker = new DecodeWorker(callback, lib_handle_, wsjtx_decode_, wsjtx_pull_message_,
                                                wsjtxModeVal, floatData, frequency, threads);
-#else
-                auto worker = new DecodeWorker(callback, lib_.get(), wsjtxModeVal, floatData, frequency, threads);
-#endif
                 worker->Queue();
             }
             else if (typedArray.TypedArrayType() == napi_int16_array)
             {
                 // Int16Array
                 auto intData = ConvertToIntArray(env, audioData);
-#if WSJTX_WINDOWS_MSVC_MODE
                 auto worker = new DecodeWorker(callback, lib_handle_, wsjtx_decode_, wsjtx_pull_message_,
                                                wsjtxModeVal, intData, frequency, threads);
-#else
-                auto worker = new DecodeWorker(callback, lib_.get(), wsjtxModeVal, intData, frequency, threads);
-#endif
                 worker->Queue();
             }
             else
@@ -259,12 +245,8 @@ namespace wsjtx_nodejs
             return env.Null();
         }
 
-#if WSJTX_WINDOWS_MSVC_MODE
         auto worker = new EncodeWorker(callback, lib_handle_, wsjtx_encode_, wsjtx_get_max_samples_,
                                        wsjtxModeVal, message, frequency, threads);
-#else
-        auto worker = new EncodeWorker(callback, lib_.get(), wsjtxModeVal, message, frequency, threads);
-#endif
         worker->Queue();
 
         return env.Undefined();
@@ -354,17 +336,10 @@ namespace wsjtx_nodejs
 
         Napi::Function callback = info[2].As<Napi::Function>();
 
-#if WSJTX_WINDOWS_MSVC_MODE
-        // WSPR功能在MSVC模式下暂不支持（C API未实现）
-        Napi::Error::New(env, "WSPR decoding is not yet supported in Windows MSVC mode")
+        // WSPR功能暂不支持（C API未实现，需要future enhancement）
+        Napi::Error::New(env, "WSPR decoding is not yet supported in the current bridge architecture. Use standard decode() for supported modes.")
             .ThrowAsJavaScriptException();
         return env.Null();
-#else
-        auto worker = new WSPRDecodeWorker(callback, lib_.get(), iqData, decoderOptions);
-        worker->Queue();
-
-        return env.Undefined();
-#endif
     }
 
     // Pull decoded messages from the queue
@@ -375,8 +350,7 @@ namespace wsjtx_nodejs
         Napi::Array results = Napi::Array::New(env);
         uint32_t count = 0;
 
-#if WSJTX_WINDOWS_MSVC_MODE
-        // MSVC mode: Use C API to pull messages from DLL
+        // 统一使用C API
         while (true)
         {
             wsjtx_message_t c_msg;
@@ -400,14 +374,6 @@ namespace wsjtx_nodejs
             );
             results[count++] = CreateWSJTXMessage(env, msg);
         }
-#else
-        // Non-MSVC mode: Use C++ API
-        WsjtxMessage msg;
-        while (lib_->pullMessage(msg))
-        {
-            results[count++] = CreateWSJTXMessage(env, msg);
-        }
-#endif
 
         return results;
     }
@@ -579,12 +545,10 @@ namespace wsjtx_nodejs
     // Async Workers Implementation
 
     // Base async worker class
-    AsyncWorkerBase::AsyncWorkerBase(Napi::Function &callback, wsjtx_lib *lib)
-        : Napi::AsyncWorker(callback), lib_(lib) {}
+    AsyncWorkerBase::AsyncWorkerBase(Napi::Function &callback)
+        : Napi::AsyncWorker(callback) {}
 
-    // Decode Worker
-#if WSJTX_WINDOWS_MSVC_MODE
-    // MSVC mode constructors
+    // Decode Worker constructors
     DecodeWorker::DecodeWorker(Napi::Function &callback,
                                wsjtx_handle_t handle,
                                wsjtx_decode_fn decode_fn,
@@ -593,7 +557,7 @@ namespace wsjtx_nodejs
                                const std::vector<float> &audioData,
                                int frequency,
                                int threads)
-        : AsyncWorkerBase(callback, nullptr),
+        : AsyncWorkerBase(callback),
           handle_(handle),
           decode_fn_(decode_fn),
           pull_fn_(pull_fn),
@@ -611,7 +575,7 @@ namespace wsjtx_nodejs
                                const std::vector<short int> &audioData,
                                int frequency,
                                int threads)
-        : AsyncWorkerBase(callback, nullptr),
+        : AsyncWorkerBase(callback),
           handle_(handle),
           decode_fn_(decode_fn),
           pull_fn_(pull_fn),
@@ -620,30 +584,15 @@ namespace wsjtx_nodejs
           frequency_(frequency),
           threads_(threads),
           useFloat_(false) {}
-#else
-    // Non-MSVC mode constructors
-    DecodeWorker::DecodeWorker(Napi::Function &callback, wsjtx_lib *lib,
-                               wsjtxMode mode, const std::vector<float> &audioData,
-                               int frequency, int threads)
-        : AsyncWorkerBase(callback, lib), mode_(mode), floatData_(audioData),
-          frequency_(frequency), threads_(threads), useFloat_(true) {}
-
-    DecodeWorker::DecodeWorker(Napi::Function &callback, wsjtx_lib *lib,
-                               wsjtxMode mode, const std::vector<short int> &audioData,
-                               int frequency, int threads)
-        : AsyncWorkerBase(callback, lib), mode_(mode), intData_(audioData),
-          frequency_(frequency), threads_(threads), useFloat_(false) {}
-#endif
 
     void DecodeWorker::Execute()
     {
         try
         {
-#if WSJTX_WINDOWS_MSVC_MODE
-            // MSVC mode: Use C API
+            // 统一使用C API
             wsjtx_mode_t c_mode = static_cast<wsjtx_mode_t>(mode_);
 
-            // Prepare audio data (only float supported in C API for now)
+            // Prepare audio data (only float supported in C API)
             std::vector<float> audioData;
             if (useFloat_)
             {
@@ -675,21 +624,8 @@ namespace wsjtx_nodejs
                 return;
             }
 
-            // Note: Messages are stored in the DLL's internal queue
+            // Note: Messages are stored in the bridge's internal queue
             // User will call pullMessages() later to retrieve them
-#else
-            // Non-MSVC mode: Use C++ API
-            if (useFloat_)
-            {
-                std::vector<float> data = floatData_; // Copy for thread safety
-                lib_->decode(mode_, data, frequency_, threads_);
-            }
-            else
-            {
-                std::vector<short int> data = intData_; // Copy for thread safety
-                lib_->decode(mode_, data, frequency_, threads_);
-            }
-#endif
         }
         catch (const std::exception &e)
         {
@@ -703,40 +639,11 @@ namespace wsjtx_nodejs
         Callback().Call({env.Null(), Napi::Boolean::New(env, true)});
     }
 
-    // Encode Worker
-#if WSJTX_WINDOWS_MSVC_MODE
-    // MSVC mode constructor
-    EncodeWorker::EncodeWorker(Napi::Function &callback,
-                               wsjtx_handle_t handle,
-                               wsjtx_encode_fn encode_fn,
-                               wsjtx_get_max_samples_fn get_max_samples_fn,
-                               wsjtxMode mode,
-                               const std::string &message,
-                               int frequency,
-                               int threads)
-        : AsyncWorkerBase(callback, nullptr),
-          handle_(handle),
-          encode_fn_(encode_fn),
-          get_max_samples_fn_(get_max_samples_fn),
-          mode_(mode),
-          message_(message),
-          frequency_(frequency),
-          threads_(threads) {}
-#else
-    // Non-MSVC mode constructor
-    EncodeWorker::EncodeWorker(Napi::Function &callback, wsjtx_lib *lib,
-                               wsjtxMode mode, const std::string &message,
-                               int frequency, int threads)
-        : AsyncWorkerBase(callback, lib), mode_(mode), message_(message),
-          frequency_(frequency), threads_(threads) {}
-#endif
-
     void EncodeWorker::Execute()
     {
         try
         {
-#if WSJTX_WINDOWS_MSVC_MODE
-            // MSVC mode: Use C API
+            // 统一使用C API
             wsjtx_mode_t c_mode = static_cast<wsjtx_mode_t>(mode_);
 
             // Get maximum sample count for this mode
@@ -775,12 +682,6 @@ namespace wsjtx_nodejs
 
             // C API doesn't modify the message, so messageSent_ is same as input
             messageSent_ = message_;
-#else
-            // Non-MSVC mode: Use C++ API
-            std::string messageSend;
-            audioData_ = lib_->encode(mode_, frequency_, message_, messageSend);
-            messageSent_ = messageSend;
-#endif
         }
         catch (const std::exception &e)
         {
@@ -803,23 +704,16 @@ namespace wsjtx_nodejs
         Callback().Call({env.Null(), result});
     }
 
-    // WSPR Decode Worker
-    WSPRDecodeWorker::WSPRDecodeWorker(Napi::Function &callback, wsjtx_lib *lib,
+    // WSPR Decode Worker (currently disabled - not implemented in bridge API)
+    WSPRDecodeWorker::WSPRDecodeWorker(Napi::Function &callback,
                                        const std::vector<std::complex<float>> &iqData,
                                        const decoder_options &options)
-        : AsyncWorkerBase(callback, lib), iqData_(iqData), options_(options) {}
+        : AsyncWorkerBase(callback), iqData_(iqData), options_(options) {}
 
     void WSPRDecodeWorker::Execute()
     {
-        try
-        {
-            std::vector<std::complex<float>> data = iqData_; // Copy for thread safety
-            results_ = lib_->wspr_decode(data, options_);
-        }
-        catch (const std::exception &e)
-        {
-            SetError(e.what());
-        }
+        // WSPR is not implemented in the bridge API yet
+        SetError("WSPR decoding is not supported in the current bridge architecture");
     }
 
     void WSPRDecodeWorker::OnOK()
@@ -909,124 +803,153 @@ namespace wsjtx_nodejs
         }
     }
 
-#if WSJTX_WINDOWS_MSVC_MODE
-    // Windows MSVC mode: DLL loading implementation
+    // ==================== 跨平台Bridge加载实现 ====================
 
-    std::wstring WSJTXLibWrapper::GetDLLPath()
+    std::string WSJTXLibWrapper::GetBridgePath()
     {
-        // Get the path of the current .node module
+#ifdef _WIN32
+        // Windows: 获取.node模块路径
         wchar_t modulePath[MAX_PATH];
         HMODULE hModule = nullptr;
 
-        // Get the handle of the current module (.node file)
+        // 获取当前模块句柄
         GetModuleHandleExW(
             GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
             reinterpret_cast<LPCWSTR>(&WSJTXLibWrapper::Init),
             &hModule);
 
-        if (hModule == nullptr)
+        if (!hModule || GetModuleFileNameW(hModule, modulePath, MAX_PATH) == 0)
         {
-            throw std::runtime_error("Failed to get module handle");
+            throw std::runtime_error("Failed to get module path on Windows");
         }
 
-        // Get the full path of the module
-        if (GetModuleFileNameW(hModule, modulePath, MAX_PATH) == 0)
+        // 转换为窄字符串
+        std::wstring wideDir(modulePath);
+        size_t lastSlash = wideDir.find_last_of(L"\\/");
+        if (lastSlash != std::wstring::npos)
         {
-            throw std::runtime_error("Failed to get module file name");
+            wideDir = wideDir.substr(0, lastSlash);
         }
 
-        // Extract directory path
-        std::wstring moduleDir(modulePath);
-        size_t lastSlash = moduleDir.find_last_of(L"\\/");
-        if (lastSlash == std::wstring::npos)
+        // 转换为UTF-8
+        int size_needed = WideCharToMultiByte(CP_UTF8, 0, wideDir.c_str(), -1, NULL, 0, NULL, NULL);
+        std::string dir(size_needed - 1, 0);
+        WideCharToMultiByte(CP_UTF8, 0, wideDir.c_str(), -1, &dir[0], size_needed, NULL, NULL);
+
+        return dir + "\\wsjtx_bridge.dll";
+#else
+        // Unix (Linux/macOS): 使用dladdr获取.node路径
+        Dl_info info;
+        if (dladdr((void*)&WSJTXLibWrapper::Init, &info) == 0)
         {
-            throw std::runtime_error("Failed to extract module directory");
+            throw std::runtime_error("Failed to get module path on Unix");
         }
 
-        moduleDir = moduleDir.substr(0, lastSlash);
+        std::string modulePath(info.dli_fname);
+        size_t lastSlash = modulePath.find_last_of('/');
+        std::string dir = (lastSlash != std::string::npos) ? modulePath.substr(0, lastSlash) : ".";
 
-        // Construct DLL path (use wsjtx_bridge.dll)
-        std::wstring dllPath = moduleDir + L"\\wsjtx_bridge.dll";
-
-        return dllPath;
+#ifdef __APPLE__
+        return dir + "/wsjtx_bridge.dylib";
+#else
+        return dir + "/wsjtx_bridge.so";
+#endif
+#endif
     }
 
-    void WSJTXLibWrapper::LoadDLL()
+    void WSJTXLibWrapper::LoadBridge()
     {
         try
         {
-            // Get DLL path
-            std::wstring dllPath = GetDLLPath();
-            std::wstring dllDir = dllPath.substr(0, dllPath.find_last_of(L"\\/"));
+            // 获取bridge库路径
+            std::string bridgePath = GetBridgePath();
 
-            // Set DLL search directory to ensure dependencies are found
-            SetDllDirectoryW(dllDir.c_str());
+#ifdef _WIN32
+            // Windows: 转换为宽字符串
+            int size_needed = MultiByteToWideChar(CP_UTF8, 0, bridgePath.c_str(), -1, NULL, 0);
+            std::wstring widePath(size_needed - 1, 0);
+            MultiByteToWideChar(CP_UTF8, 0, bridgePath.c_str(), -1, &widePath[0], size_needed);
 
-            // Load the DLL using absolute path
-            dll_handle_ = LoadLibraryW(dllPath.c_str());
+            // 设置DLL搜索目录
+            size_t lastSlash = widePath.find_last_of(L"\\/");
+            if (lastSlash != std::wstring::npos)
+            {
+                std::wstring dir = widePath.substr(0, lastSlash);
+                SetDllDirectoryW(dir.c_str());
+            }
 
+            // 加载库
+            dll_handle_ = LOAD_LIBRARY(widePath.c_str());
             if (!dll_handle_)
             {
                 DWORD error = GetLastError();
-                std::string msg = "Failed to load wsjtx_bridge.dll (error code: " + std::to_string(error) + ")";
-                throw std::runtime_error(msg);
+                throw std::runtime_error("Failed to load wsjtx_bridge.dll (error: " + std::to_string(error) + ")");
             }
 
-            // Get function pointers
-            wsjtx_create_ = reinterpret_cast<wsjtx_create_fn>(GetProcAddress(dll_handle_, "wsjtx_create"));
-            wsjtx_destroy_ = reinterpret_cast<wsjtx_destroy_fn>(GetProcAddress(dll_handle_, "wsjtx_destroy"));
-            wsjtx_decode_ = reinterpret_cast<wsjtx_decode_fn>(GetProcAddress(dll_handle_, "wsjtx_decode"));
-            wsjtx_pull_message_ = reinterpret_cast<wsjtx_pull_message_fn>(GetProcAddress(dll_handle_, "wsjtx_pull_message"));
-            wsjtx_encode_ = reinterpret_cast<wsjtx_encode_fn>(GetProcAddress(dll_handle_, "wsjtx_encode"));
-            wsjtx_get_sample_rate_ = reinterpret_cast<wsjtx_get_sample_rate_fn>(GetProcAddress(dll_handle_, "wsjtx_get_sample_rate"));
-            wsjtx_get_max_samples_ = reinterpret_cast<wsjtx_get_max_samples_fn>(GetProcAddress(dll_handle_, "wsjtx_get_max_samples"));
+            // 恢复DLL搜索路径
+            SetDllDirectoryW(nullptr);
+#else
+            // Unix: 直接加载
+            dll_handle_ = LOAD_LIBRARY(bridgePath.c_str());
+            if (!dll_handle_)
+            {
+                const char* error = dlerror();
+                throw std::runtime_error(std::string("Failed to load bridge library: ") + (error ? error : "unknown error"));
+            }
+#endif
 
-            // Verify all required functions were loaded
+            // 加载函数符号（跨平台）
+            wsjtx_create_ = reinterpret_cast<wsjtx_create_fn>(GET_SYMBOL(dll_handle_, "wsjtx_create"));
+            wsjtx_destroy_ = reinterpret_cast<wsjtx_destroy_fn>(GET_SYMBOL(dll_handle_, "wsjtx_destroy"));
+            wsjtx_decode_ = reinterpret_cast<wsjtx_decode_fn>(GET_SYMBOL(dll_handle_, "wsjtx_decode"));
+            wsjtx_pull_message_ = reinterpret_cast<wsjtx_pull_message_fn>(GET_SYMBOL(dll_handle_, "wsjtx_pull_message"));
+            wsjtx_encode_ = reinterpret_cast<wsjtx_encode_fn>(GET_SYMBOL(dll_handle_, "wsjtx_encode"));
+            wsjtx_get_sample_rate_ = reinterpret_cast<wsjtx_get_sample_rate_fn>(GET_SYMBOL(dll_handle_, "wsjtx_get_sample_rate"));
+            wsjtx_get_max_samples_ = reinterpret_cast<wsjtx_get_max_samples_fn>(GET_SYMBOL(dll_handle_, "wsjtx_get_max_samples"));
+
+            // 验证所有函数都加载成功
             if (!wsjtx_create_ || !wsjtx_destroy_ || !wsjtx_decode_ ||
                 !wsjtx_pull_message_ || !wsjtx_encode_ ||
                 !wsjtx_get_sample_rate_ || !wsjtx_get_max_samples_)
             {
-                UnloadDLL();
-                throw std::runtime_error("Failed to load one or more required functions from wsjtx_bridge.dll");
+                UnloadBridge();
+                throw std::runtime_error("Failed to load one or more required functions from bridge library");
             }
 
-            // Create library instance
+            // 创建库实例
             lib_handle_ = wsjtx_create_();
-
             if (!lib_handle_)
             {
-                UnloadDLL();
+                UnloadBridge();
                 throw std::runtime_error("Failed to create WSJTX library instance");
             }
-
-            // Restore DLL search path
-            SetDllDirectoryW(nullptr);
         }
         catch (const std::exception &e)
         {
-            // Make sure to clean up and restore DLL search path on error
+#ifdef _WIN32
             SetDllDirectoryW(nullptr);
+#endif
             throw;
         }
     }
 
-    void WSJTXLibWrapper::UnloadDLL()
+    void WSJTXLibWrapper::UnloadBridge()
     {
-        // Destroy library instance
+        // 销毁库实例
         if (lib_handle_ && wsjtx_destroy_)
         {
             wsjtx_destroy_(lib_handle_);
             lib_handle_ = nullptr;
         }
 
-        // Unload DLL
+        // 卸载动态库
         if (dll_handle_)
         {
-            FreeLibrary(dll_handle_);
+            FREE_LIBRARY(dll_handle_);
             dll_handle_ = nullptr;
         }
 
-        // Clear function pointers
+        // 清空函数指针
         wsjtx_create_ = nullptr;
         wsjtx_destroy_ = nullptr;
         wsjtx_decode_ = nullptr;
@@ -1036,16 +959,11 @@ namespace wsjtx_nodejs
         wsjtx_get_max_samples_ = nullptr;
     }
 
-    // Destructor
+    // 析构函数（跨平台统一）
     WSJTXLibWrapper::~WSJTXLibWrapper()
     {
-        UnloadDLL();
+        UnloadBridge();
     }
-
-#else
-    // Non-Windows or MinGW mode: default destructor
-    WSJTXLibWrapper::~WSJTXLibWrapper() = default;
-#endif
 
     // Module initialization
     Napi::Object Init(Napi::Env env, Napi::Object exports)
