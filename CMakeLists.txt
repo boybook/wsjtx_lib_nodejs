@@ -126,9 +126,6 @@ elseif(WIN32)
     endif()
 endif()
 
-# Use pkg-config for all platforms (including Windows with MSYS2)
-find_package(PkgConfig REQUIRED)
-
 # Set CMake policy for newer Boost versions
 if(POLICY CMP0167)
     cmake_policy(SET CMP0167 NEW)
@@ -141,14 +138,14 @@ if(WIN32 AND CMAKE_CXX_COMPILER_ID MATCHES "GNU")
     if(NOT Boost_FOUND)
         # Manual detection for MSYS2 Boost
         message(STATUS "Boost not found via find_package, trying manual detection...")
-        
+
         # Look for Boost in MSYS2 locations
-        find_path(Boost_INCLUDE_DIRS 
+        find_path(Boost_INCLUDE_DIRS
             NAMES boost/version.hpp
             PATHS /mingw64/include C:/msys64/mingw64/include
             NO_DEFAULT_PATH
         )
-        
+
         if(Boost_INCLUDE_DIRS)
             message(STATUS "Found Boost headers at: ${Boost_INCLUDE_DIRS}")
             set(Boost_FOUND TRUE)
@@ -162,63 +159,80 @@ if(WIN32 AND CMAKE_CXX_COMPILER_ID MATCHES "GNU")
         message(STATUS "Boost found via find_package: ${Boost_VERSION}")
         set(BOOST_LIBRARIES ${Boost_LIBRARIES})
     endif()
-else()
-    # Other platforms: use standard find_package
+elseif(NOT WSJTX_WINDOWS_MSVC_MODE)
+    # Other platforms (non-MSVC): use standard find_package
     find_package(Boost REQUIRED)
     set(BOOST_LIBRARIES ${Boost_LIBRARIES})
+else()
+    # MSVC mode: Boost is header-only for our use case
+    message(STATUS "MSVC mode: skipping Boost library search (header-only usage)")
+    set(BOOST_LIBRARIES "")
 endif()
 
-# Find FFTW3 using pkg-config
-pkg_check_modules(FFTW3F REQUIRED fftw3f)
+# Find FFTW3 and pkg-config (only needed when building wsjtx_lib)
+if(NOT WSJTX_SKIP_LIB_BUILD)
+    # Use pkg-config for all platforms (including Windows with MSYS2)
+    find_package(PkgConfig REQUIRED)
 
-# Check for FFTW3 threads support - 改进的检测逻辑
-if(UNIX AND NOT APPLE)
-    # Linux: search in standard locations
-    find_library(FFTW3F_THREADS_LIB 
-        NAMES fftw3f_threads libfftw3f_threads
-        PATHS /usr/lib /usr/local/lib /usr/lib/x86_64-linux-gnu /usr/lib/aarch64-linux-gnu
-    )
-elseif(APPLE)
-    # macOS: search in homebrew locations
-    find_library(FFTW3F_THREADS_LIB 
-        NAMES fftw3f_threads libfftw3f_threads
-        PATHS /opt/homebrew/lib /usr/local/lib
-        NO_DEFAULT_PATH
-    )
-elseif(WIN32 AND CMAKE_CXX_COMPILER_ID MATCHES "GNU")
-    # Windows with MSYS2/MinGW: use pkg-config if available, otherwise force enable
-    execute_process(
-        COMMAND pkg-config --exists fftw3f
-        RESULT_VARIABLE PKG_CONFIG_FFTW_RESULT
-        OUTPUT_QUIET ERROR_QUIET
-    )
-    
-    if(PKG_CONFIG_FFTW_RESULT EQUAL 0)
-        # FFTW3 found via pkg-config, assume threads support exists
-        message(STATUS "FFTW3 found via pkg-config, enabling threads support")
-        set(FFTW3F_THREADS_LIB "fftw3f_threads")
-        set(FFTW_THREADS_LIBRARIES "fftw3f_threads")
+    # Find FFTW3 using pkg-config
+    pkg_check_modules(FFTW3F REQUIRED fftw3f)
+
+    # Check for FFTW3 threads support - 改进的检测逻辑
+    if(UNIX AND NOT APPLE)
+        # Linux: search in standard locations
+        find_library(FFTW3F_THREADS_LIB
+            NAMES fftw3f_threads libfftw3f_threads
+            PATHS /usr/lib /usr/local/lib /usr/lib/x86_64-linux-gnu /usr/lib/aarch64-linux-gnu
+        )
+    elseif(APPLE)
+        # macOS: search in homebrew locations
+        find_library(FFTW3F_THREADS_LIB
+            NAMES fftw3f_threads libfftw3f_threads
+            PATHS /opt/homebrew/lib /usr/local/lib
+            NO_DEFAULT_PATH
+        )
+    elseif(WIN32 AND CMAKE_CXX_COMPILER_ID MATCHES "GNU")
+        # Windows with MSYS2/MinGW: use pkg-config if available, otherwise force enable
+        execute_process(
+            COMMAND pkg-config --exists fftw3f
+            RESULT_VARIABLE PKG_CONFIG_FFTW_RESULT
+            OUTPUT_QUIET ERROR_QUIET
+        )
+
+        if(PKG_CONFIG_FFTW_RESULT EQUAL 0)
+            # FFTW3 found via pkg-config, assume threads support exists
+            message(STATUS "FFTW3 found via pkg-config, enabling threads support")
+            set(FFTW3F_THREADS_LIB "fftw3f_threads")
+            set(FFTW_THREADS_LIBRARIES "fftw3f_threads")
+            set(FFTW_HAS_THREADS TRUE)
+        else()
+            message(STATUS "FFTW3 threads support detection failed, disabling")
+            set(FFTW_THREADS_LIBRARIES "")
+            set(FFTW_HAS_THREADS FALSE)
+        endif()
+    else()
+        # Other Windows: search in mingw64 locations
+        find_library(FFTW3F_THREADS_LIB
+            NAMES fftw3f_threads libfftw3f_threads
+            PATHS /mingw64/lib D:/msys64/mingw64/lib
+            NO_DEFAULT_PATH
+        )
+    endif()
+
+    if(FFTW3F_THREADS_LIB)
+        message(STATUS "FFTW3 with threads support found: ${FFTW3F_THREADS_LIB}")
+        set(FFTW_THREADS_LIBRARIES fftw3f_threads)
         set(FFTW_HAS_THREADS TRUE)
     else()
-        message(STATUS "FFTW3 threads support detection failed, disabling")
+        message(STATUS "FFTW3 threads not found, using single-threaded version")
         set(FFTW_THREADS_LIBRARIES "")
         set(FFTW_HAS_THREADS FALSE)
     endif()
 else()
-    # Other Windows: search in mingw64 locations
-    find_library(FFTW3F_THREADS_LIB 
-        NAMES fftw3f_threads libfftw3f_threads
-        PATHS /mingw64/lib D:/msys64/mingw64/lib
-        NO_DEFAULT_PATH
-    )
-endif()
-
-if(FFTW3F_THREADS_LIB)
-    message(STATUS "FFTW3 with threads support found: ${FFTW3F_THREADS_LIB}")
-    set(FFTW_THREADS_LIBRARIES fftw3f_threads)
-    set(FFTW_HAS_THREADS TRUE)
-else()
-    message(STATUS "FFTW3 threads not found, using single-threaded version")
+    message(STATUS "Skipping FFTW3 detection (MSVC mode, wsjtx_lib will be loaded dynamically)")
+    # 设置空值避免未定义变量错误
+    set(FFTW3F_INCLUDE_DIRS "")
+    set(FFTW3F_LIBRARIES "")
     set(FFTW_THREADS_LIBRARIES "")
     set(FFTW_HAS_THREADS FALSE)
 endif()
@@ -252,96 +266,98 @@ include_directories(
     ${Boost_INCLUDE_DIRS}
 )
 
-# Define LIBRARIES_FROM_REFERENCES for wsjtx_lib submodule
-set(LIBRARIES_FROM_REFERENCES 
-    ${FFTW3F_LIBRARIES}
-    ${FFTW_THREADS_LIBRARIES}
-)
+# Define LIBRARIES_FROM_REFERENCES for wsjtx_lib submodule (only when building wsjtx_lib)
+if(NOT WSJTX_SKIP_LIB_BUILD)
+    set(LIBRARIES_FROM_REFERENCES
+        ${FFTW3F_LIBRARIES}
+        ${FFTW_THREADS_LIBRARIES}
+    )
 
-# Platform-specific library setup
-if(APPLE)
-    # Find gfortran library path for macOS - support both Intel and ARM64
-    set(GFORTRAN_SEARCH_PATHS
-        "/opt/homebrew/bin"  # ARM64 (Apple Silicon)
-        "/usr/local/bin"     # x64 (Intel)
-    )
-    
-    # Try to find gfortran in common locations
-    find_program(GFORTRAN_EXECUTABLE 
-        NAMES gfortran gfortran-14 gfortran-13 gfortran-12 gfortran-11
-        PATHS ${GFORTRAN_SEARCH_PATHS}
-        NO_DEFAULT_PATH
-    )
-    
-    # Also try system PATH as fallback
-    if(NOT GFORTRAN_EXECUTABLE)
-        find_program(GFORTRAN_EXECUTABLE 
+    # Platform-specific library setup (only when building wsjtx_lib)
+    if(APPLE)
+        # Find gfortran library path for macOS - support both Intel and ARM64
+        set(GFORTRAN_SEARCH_PATHS
+            "/opt/homebrew/bin"  # ARM64 (Apple Silicon)
+            "/usr/local/bin"     # x64 (Intel)
+        )
+
+        # Try to find gfortran in common locations
+        find_program(GFORTRAN_EXECUTABLE
             NAMES gfortran gfortran-14 gfortran-13 gfortran-12 gfortran-11
+            PATHS ${GFORTRAN_SEARCH_PATHS}
+            NO_DEFAULT_PATH
         )
-    endif()
-    
-    if(GFORTRAN_EXECUTABLE)
-        message(STATUS "Found gfortran: ${GFORTRAN_EXECUTABLE}")
-        
-        # Get library path (but don't set CMAKE_Fortran_COMPILER here to avoid cache conflicts)
-        execute_process(
-            COMMAND ${GFORTRAN_EXECUTABLE} --print-file-name=libgfortran.dylib
-            OUTPUT_VARIABLE GFORTRAN_LIB_PATH
-            OUTPUT_STRIP_TRAILING_WHITESPACE
-            ERROR_QUIET
-        )
-        
-        if(GFORTRAN_LIB_PATH AND NOT GFORTRAN_LIB_PATH STREQUAL "libgfortran.dylib")
-            get_filename_component(GFORTRAN_LIB_DIR "${GFORTRAN_LIB_PATH}" DIRECTORY)
-            
-            # Find libgcc_s.1 for nested function support
+
+        # Also try system PATH as fallback
+        if(NOT GFORTRAN_EXECUTABLE)
+            find_program(GFORTRAN_EXECUTABLE
+                NAMES gfortran gfortran-14 gfortran-13 gfortran-12 gfortran-11
+            )
+        endif()
+
+        if(GFORTRAN_EXECUTABLE)
+            message(STATUS "Found gfortran: ${GFORTRAN_EXECUTABLE}")
+
+            # Get library path (but don't set CMAKE_Fortran_COMPILER here to avoid cache conflicts)
             execute_process(
-                COMMAND ${GFORTRAN_EXECUTABLE} --print-file-name=libgcc_s.1.dylib
-                OUTPUT_VARIABLE LIBGCC_S_PATH
+                COMMAND ${GFORTRAN_EXECUTABLE} --print-file-name=libgfortran.dylib
+                OUTPUT_VARIABLE GFORTRAN_LIB_PATH
                 OUTPUT_STRIP_TRAILING_WHITESPACE
                 ERROR_QUIET
             )
-            
-            if(LIBGCC_S_PATH AND NOT LIBGCC_S_PATH STREQUAL "libgcc_s.1.dylib")
-                get_filename_component(LIBGCC_S_DIR "${LIBGCC_S_PATH}" DIRECTORY)
-                link_directories(${LIBGCC_S_DIR})
+
+            if(GFORTRAN_LIB_PATH AND NOT GFORTRAN_LIB_PATH STREQUAL "libgfortran.dylib")
+                get_filename_component(GFORTRAN_LIB_DIR "${GFORTRAN_LIB_PATH}" DIRECTORY)
+
+                # Find libgcc_s.1 for nested function support
+                execute_process(
+                    COMMAND ${GFORTRAN_EXECUTABLE} --print-file-name=libgcc_s.1.dylib
+                    OUTPUT_VARIABLE LIBGCC_S_PATH
+                    OUTPUT_STRIP_TRAILING_WHITESPACE
+                    ERROR_QUIET
+                )
+
+                if(LIBGCC_S_PATH AND NOT LIBGCC_S_PATH STREQUAL "libgcc_s.1.dylib")
+                    get_filename_component(LIBGCC_S_DIR "${LIBGCC_S_PATH}" DIRECTORY)
+                    link_directories(${LIBGCC_S_DIR})
+                endif()
+
+                link_directories(${GFORTRAN_LIB_DIR})
             endif()
-            
-            link_directories(${GFORTRAN_LIB_DIR})
+        else()
+            message(WARNING "gfortran not found, Fortran compilation may fail")
+            message(STATUS "Searched in paths: ${GFORTRAN_SEARCH_PATHS}")
+            message(STATUS "You may need to install gfortran: brew install gcc")
         endif()
-    else()
-        message(WARNING "gfortran not found, Fortran compilation may fail")
-        message(STATUS "Searched in paths: ${GFORTRAN_SEARCH_PATHS}")
-        message(STATUS "You may need to install gfortran: brew install gcc")
-    endif()
-    
-    list(APPEND LIBRARIES_FROM_REFERENCES 
-        "-framework Accelerate"
-        gfortran 
-        gcc_s.1
-    )
-    if(FFTW_HAS_THREADS)
-        list(APPEND LIBRARIES_FROM_REFERENCES fftw3f_threads)
-    endif()
-elseif(UNIX)
-    # Linux specific libraries
-    list(APPEND LIBRARIES_FROM_REFERENCES 
-        gfortran 
-        gcc_s 
-        pthread
-    )
-    if(FFTW_HAS_THREADS)
-        list(APPEND LIBRARIES_FROM_REFERENCES fftw3f_threads)
-    endif()
-elseif(WIN32)
-    # Windows with MinGW-w64 specific libraries
-    list(APPEND LIBRARIES_FROM_REFERENCES 
-        gfortran 
-        gcc_s 
-        pthread
-    )
-    if(FFTW_HAS_THREADS)
-        list(APPEND LIBRARIES_FROM_REFERENCES fftw3f_threads)
+
+        list(APPEND LIBRARIES_FROM_REFERENCES
+            "-framework Accelerate"
+            gfortran
+            gcc_s.1
+        )
+        if(FFTW_HAS_THREADS)
+            list(APPEND LIBRARIES_FROM_REFERENCES fftw3f_threads)
+        endif()
+    elseif(UNIX)
+        # Linux specific libraries
+        list(APPEND LIBRARIES_FROM_REFERENCES
+            gfortran
+            gcc_s
+            pthread
+        )
+        if(FFTW_HAS_THREADS)
+            list(APPEND LIBRARIES_FROM_REFERENCES fftw3f_threads)
+        endif()
+    elseif(WIN32)
+        # Windows with MinGW-w64 specific libraries
+        list(APPEND LIBRARIES_FROM_REFERENCES
+            gfortran
+            gcc_s
+            pthread
+        )
+        if(FFTW_HAS_THREADS)
+            list(APPEND LIBRARIES_FROM_REFERENCES fftw3f_threads)
+        endif()
     endif()
 endif()
 
@@ -410,8 +426,10 @@ else()
     message(STATUS "Skipping wsjtx_lib build (MSVC mode)")
 endif()
 
-# Link directories (must be before creating target)
-link_directories(${FFTW3F_LIBRARY_DIRS})
+# Link directories (must be before creating target, only when building wsjtx_lib)
+if(NOT WSJTX_SKIP_LIB_BUILD)
+    link_directories(${FFTW3F_LIBRARY_DIRS})
+endif()
 
 # ==================== 构建 Node.js Addon (.node) ====================
 # 注意: MinGW模式在上面已经return(),不会执行到这里
