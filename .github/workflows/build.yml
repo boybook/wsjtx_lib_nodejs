@@ -35,7 +35,13 @@ jobs:
             arch: arm64
             node_arch: arm64
             cmake_arch: arm64
-          
+
+          # macOS Intel builds
+          - os: macos-15-intel
+            arch: x64
+            node_arch: x64
+            cmake_arch: x86_64
+
           # Windows builds with MSYS2/MinGW-w64
           - os: windows-latest
             arch: x64
@@ -677,7 +683,7 @@ jobs:
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: prebuilt-${{ matrix.os == 'ubuntu-24.04-arm' && 'linux' || (matrix.os == 'ubuntu-latest' && 'linux' || (matrix.os == 'macos-latest' && 'darwin' || 'win32')) }}-${{ matrix.arch }}
+          name: prebuilt-${{ matrix.os == 'ubuntu-24.04-arm' && 'linux' || (matrix.os == 'ubuntu-latest' && 'linux' || (startsWith(matrix.os, 'macos') && 'darwin' || 'win32')) }}-${{ matrix.arch }}
           path: prebuilds/
           retention-days: 30
           if-no-files-found: error
@@ -687,7 +693,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: build-debug-${{ matrix.os == 'ubuntu-24.04-arm' && 'linux' || (matrix.os == 'ubuntu-latest' && 'linux' || (matrix.os == 'macos-latest' && 'darwin' || 'win32')) }}-${{ matrix.arch }}
+          name: build-debug-${{ matrix.os == 'ubuntu-24.04-arm' && 'linux' || (matrix.os == 'ubuntu-latest' && 'linux' || (startsWith(matrix.os, 'macos') && 'darwin' || 'win32')) }}-${{ matrix.arch }}
           path: |
             build/
             CMakeCache.txt

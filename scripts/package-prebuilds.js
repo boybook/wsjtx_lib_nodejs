@@ -15,6 +15,7 @@ const SUPPORTED_PLATFORMS = [
   { platform: 'linux', arch: 'x64' },
   { platform: 'linux', arch: 'arm64' },
   { platform: 'darwin', arch: 'arm64' },
+  { platform: 'darwin', arch: 'x64' },
   { platform: 'win32', arch: 'x64' }
 ];
 
