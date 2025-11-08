@@ -412,7 +412,7 @@ jobs:
           # 映射GitHub Actions平台名称到Node.js标准平台名称
           case "${{ matrix.os }}" in
             ubuntu-latest|ubuntu-*) PLATFORM_NAME="linux" ;;
-            macos-latest) PLATFORM_NAME="darwin" ;;
+            macos*) PLATFORM_NAME="darwin" ;;
             windows-latest) PLATFORM_NAME="win32" ;;
             *) PLATFORM_NAME="${{ matrix.os }}" ;;
           esac
@@ -539,11 +539,11 @@ jobs:
           echo "  • PWD: $(pwd)"
           echo "  • User: $(whoami)"
           echo ""
-          
+
           # 映射GitHub Actions平台名称到Node.js标准平台名称
           case "${{ matrix.os }}" in
             ubuntu-latest|ubuntu-*) PLATFORM_NAME="linux" ;;
-            macos-latest) PLATFORM_NAME="darwin" ;;
+            macos*) PLATFORM_NAME="darwin" ;;
             windows-latest) PLATFORM_NAME="win32" ;;
             *) PLATFORM_NAME="${{ matrix.os }}" ;;
           esac
