@@ -1,29 +1,23 @@
 #pragma once
 
 #include <napi.h>
-#include <memory>
 #include <vector>
 #include <string>
-#include <complex>
-#include <wsjtx_lib.h>
+#include "wsjtx_c_api.h"
 
 namespace wsjtx_nodejs {
 
-// Type aliases for convenience
-using WsjTxVector = std::vector<float>;
-using IntWsjTxVector = std::vector<short int>;
-using WsjtxIQSampleVector = std::vector<std::complex<float>>;
-
 /**
- * Native WSJTX library wrapper class
+ * Native WSJTX library wrapper class.
+ * Uses the pure C API (wsjtx_c_api.h) for all interactions with the core library.
  */
 class WSJTXLibWrapper : public Napi::ObjectWrap<WSJTXLibWrapper> {
 public:
     static Napi::Object Init(Napi::Env env, Napi::Object exports);
     WSJTXLibWrapper(const Napi::CallbackInfo& info);
+    ~WSJTXLibWrapper();
 
 private:
-    // Instance methods
     Napi::Value Decode(const Napi::CallbackInfo& info);
     Napi::Value Encode(const Napi::CallbackInfo& info);
     Napi::Value DecodeWSPR(const Napi::CallbackInfo& info);
@@ -34,36 +28,29 @@ private:
     Napi::Value GetTransmissionDuration(const Napi::CallbackInfo& info);
     Napi::Value ConvertAudioFormat(const Napi::CallbackInfo& info);
 
-    // Internal helper methods
-    Napi::Object CreateWSJTXMessage(Napi::Env env, const WsjtxMessage& msg);
-    Napi::Object CreateDecodeResult(Napi::Env env, wsjtxMode mode, const std::vector<WsjtxMessage>& messages);
-    Napi::Object CreateEncodeResult(Napi::Env env, const std::vector<float>& audioData, int sampleRate, const std::string& actualMessage);
-    Napi::Object CreateWSPRResult(Napi::Env env, const decoder_results& result);
-    
-    // Validation helpers
+    Napi::Object CreateMessageObject(Napi::Env env, const wsjtx_message_t& msg);
+
     void ValidateMode(Napi::Env env, int mode);
     void ValidateFrequency(Napi::Env env, int frequency);
     void ValidateThreads(Napi::Env env, int threads);
     void ValidateMessage(Napi::Env env, const std::string& message);
-    
-    // Audio data conversion
+
     std::vector<float> ConvertToFloatArray(Napi::Env env, const Napi::Value& audioData);
     std::vector<short int> ConvertToIntArray(Napi::Env env, const Napi::Value& audioData);
 
-    // Native library instance
-    std::unique_ptr<wsjtx_lib> lib_;
+    wsjtx_handle_t handle_;
 };
 
 /**
- * Base class for async workers
+ * Base class for async workers that need the library handle
  */
 class AsyncWorkerBase : public Napi::AsyncWorker {
 public:
-    AsyncWorkerBase(Napi::Function& callback, wsjtx_lib* lib);
+    AsyncWorkerBase(Napi::Function& callback, wsjtx_handle_t handle);
     virtual ~AsyncWorkerBase() = default;
 
 protected:
-    wsjtx_lib* lib_;
+    wsjtx_handle_t handle_;
 };
 
 /**
@@ -71,34 +58,25 @@ protected:
  */
 class DecodeWorker : public AsyncWorkerBase {
 public:
-    DecodeWorker(Napi::Function& callback, 
-                 wsjtx_lib* lib,
-                 wsjtxMode mode,
-                 const std::vector<float>& audioData,
-                 int frequency,
-                 int threads);
-    
-    DecodeWorker(Napi::Function& callback, 
-                 wsjtx_lib* lib,
-                 wsjtxMode mode,
-                 const std::vector<short int>& audioData,
-                 int frequency,
-                 int threads);
+    DecodeWorker(Napi::Function& callback, wsjtx_handle_t handle,
+                 int mode, const std::vector<float>& audioData,
+                 int frequency, int threads);
 
-    ~DecodeWorker() = default;
+    DecodeWorker(Napi::Function& callback, wsjtx_handle_t handle,
+                 int mode, const std::vector<short int>& audioData,
+                 int frequency, int threads);
 
 protected:
     void Execute() override;
     void OnOK() override;
 
 private:
-    wsjtxMode mode_;
+    int mode_;
     std::vector<float> floatData_;
     std::vector<short int> intData_;
     bool useFloat_;
     int frequency_;
     int threads_;
-    std::vector<WsjtxMessage> results_;
 };
 
 /**
@@ -106,28 +84,21 @@ private:
  */
 class EncodeWorker : public AsyncWorkerBase {
 public:
-    EncodeWorker(Napi::Function& callback,
-                 wsjtx_lib* lib,
-                 wsjtxMode mode,
-                 const std::string& message,
-                 int frequency,
-                 int threads);
-
-    ~EncodeWorker() = default;
+    EncodeWorker(Napi::Function& callback, wsjtx_handle_t handle,
+                 int mode, const std::string& message,
+                 int frequency, int threads);
 
 protected:
     void Execute() override;
     void OnOK() override;
 
 private:
-    wsjtxMode mode_;
+    int mode_;
     std::string message_;
     int frequency_;
     int threads_;
     std::vector<float> audioData_;
-    std::string actualMessage_;
     std::string messageSent_;
-    int sampleRate_;
 };
 
 /**
@@ -135,43 +106,34 @@ private:
  */
 class WSPRDecodeWorker : public AsyncWorkerBase {
 public:
-    WSPRDecodeWorker(Napi::Function& callback,
-                     wsjtx_lib* lib,
-                     const std::vector<std::complex<float>>& iqData,
-                     const decoder_options& options);
-
-    ~WSPRDecodeWorker() = default;
+    WSPRDecodeWorker(Napi::Function& callback, wsjtx_handle_t handle,
+                     const std::vector<float>& iqInterleaved,
+                     const wsjtx_decoder_options_t& options);
 
 protected:
     void Execute() override;
     void OnOK() override;
 
 private:
-    std::vector<std::complex<float>> iqData_;
-    decoder_options options_;
-    std::vector<decoder_results> results_;
+    std::vector<float> iqInterleaved_;
+    wsjtx_decoder_options_t options_;
+    std::vector<wsjtx_decoder_result_t> results_;
 };
 
 /**
- * Async worker for simple audio format conversion
+ * Async worker for audio format conversion (no library handle needed)
  */
 class AudioConvertWorker : public Napi::AsyncWorker {
 public:
     enum class Target { Float32, Int16 };
 
-    // From Float32Array to Int16Array
     AudioConvertWorker(Napi::Function& callback,
-                       const std::vector<float>& input,
-                       Target target)
+                       const std::vector<float>& input, Target target)
         : Napi::AsyncWorker(callback), floatInput_(input), target_(target), fromFloat_(true) {}
 
-    // From Int16Array to Float32Array
     AudioConvertWorker(Napi::Function& callback,
-                       const std::vector<short int>& input,
-                       Target target)
+                       const std::vector<short int>& input, Target target)
         : Napi::AsyncWorker(callback), intInput_(input), target_(target), fromFloat_(false) {}
-
-    ~AudioConvertWorker() = default;
 
 protected:
     void Execute() override;
@@ -185,15 +147,5 @@ private:
     Target target_;
     bool fromFloat_;
 };
-
-// Module initialization functions
-Napi::String GetVersion(const Napi::CallbackInfo& info);
-Napi::Array GetSupportedModes(const Napi::CallbackInfo& info);
-
-// Utility functions
-wsjtxMode ConvertToWSJTXMode(int mode);
-int GetSampleRateForMode(wsjtxMode mode);
-double GetTransmissionDurationForMode(wsjtxMode mode);
-bool IsModeSupported(wsjtxMode mode, bool forEncoding);
 
 } // namespace wsjtx_nodejs
