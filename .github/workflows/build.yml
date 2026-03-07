@@ -157,20 +157,19 @@ jobs:
           cp build/Release/wsjtx_lib_nodejs.node "$TARGET_DIR/"
           NODE_FILE="$TARGET_DIR/wsjtx_lib_nodejs.node"
 
-          # Copy libwsjtx_core.dylib
-          cp build/Release/libwsjtx_core.dylib "$TARGET_DIR/" 2>/dev/null || true
-
-          # Bundle dylibs
+          # Bundle dylibs (dylibbundler copies dependencies automatically)
           BREW_PREFIX=$(brew --prefix 2>/dev/null || echo "/opt/homebrew")
-          SP_ARGS=""
+          SP_ARGS="-s build/Release"
           for p in "$BREW_PREFIX/opt/fftw/lib" "$BREW_PREFIX/opt/gcc@14/lib/gcc/14" \
                    "$BREW_PREFIX/opt/gcc/lib/gcc/current" "$BREW_PREFIX/Cellar/fftw"/*/lib \
                    "$BREW_PREFIX/Cellar/gcc"/*/lib/gcc/current; do
             [ -d "$p" ] && SP_ARGS="$SP_ARGS -s $p"
           done
-          dylibbundler -x "$NODE_FILE" -d "$TARGET_DIR" -p "@loader_path/" $SP_ARGS -b
+          # Step 1: bundle .node deps (including libwsjtx_core.dylib from build/Release)
+          dylibbundler -x "$NODE_FILE" -d "$TARGET_DIR" -p "@loader_path/" $SP_ARGS -b -of
+          # Step 2: bundle libwsjtx_core.dylib's own deps (fftw, gfortran, etc.)
           if [ -f "$TARGET_DIR/libwsjtx_core.dylib" ]; then
-            dylibbundler -x "$TARGET_DIR/libwsjtx_core.dylib" -d "$TARGET_DIR" -p "@loader_path/" $SP_ARGS -b 2>/dev/null || true
+            dylibbundler -x "$TARGET_DIR/libwsjtx_core.dylib" -d "$TARGET_DIR" -p "@loader_path/" $SP_ARGS -b -of
           fi
 
           echo '{}' | jq --arg p "${{ matrix.platform }}" --arg a "${{ matrix.arch }}" \
