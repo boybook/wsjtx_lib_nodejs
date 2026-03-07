@@ -276,27 +276,35 @@ target_include_directories(wsjtx_core PRIVATE
     ${Boost_INCLUDE_DIRS}
 )
 
-target_link_libraries(wsjtx_core PRIVATE
-    wsjtx_lib
-    ${FFTW3F_LIBRARIES}
-)
+target_link_libraries(wsjtx_core PRIVATE wsjtx_lib)
 
 # Platform-specific linking for wsjtx_core
 if(APPLE)
-    target_link_libraries(wsjtx_core PRIVATE "-framework Accelerate" gfortran gcc_s.1)
+    target_link_libraries(wsjtx_core PRIVATE
+        ${FFTW3F_LIBRARIES} "-framework Accelerate" gfortran gcc_s.1)
     if(FFTW_HAS_THREADS)
         target_link_libraries(wsjtx_core PRIVATE fftw3f_threads)
     endif()
 elseif(UNIX)
-    target_link_libraries(wsjtx_core PRIVATE gfortran gcc_s pthread)
+    target_link_libraries(wsjtx_core PRIVATE
+        ${FFTW3F_LIBRARIES} gfortran gcc_s pthread)
     if(FFTW_HAS_THREADS)
         target_link_libraries(wsjtx_core PRIVATE fftw3f_threads)
     endif()
 elseif(WIN32)
-    target_link_libraries(wsjtx_core PRIVATE gfortran gcc_s pthread)
-    if(FFTW_HAS_THREADS)
-        target_link_libraries(wsjtx_core PRIVATE fftw3f_threads)
-    endif()
+    # Static-link ALL non-system dependencies so wsjtx_core.dll only depends
+    # on Windows system DLLs (KERNEL32.dll, msvcrt.dll). This prevents DLL
+    # conflicts when the user's PATH contains a different MinGW installation.
+    target_link_options(wsjtx_core PRIVATE
+        -static-libgcc
+        -static-libstdc++
+    )
+    target_link_libraries(wsjtx_core PRIVATE
+        -Wl,-Bstatic
+        -lfftw3f -lfftw3f_threads
+        -lgfortran -lquadmath -lwinpthread
+        -Wl,-Bdynamic
+    )
 endif()
 
 # Output wsjtx_core to build/Release alongside .node

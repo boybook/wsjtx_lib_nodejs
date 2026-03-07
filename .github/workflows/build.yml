@@ -109,11 +109,9 @@ jobs:
         if: runner.os == 'Windows'
         shell: msys2 {0}
         run: |
-          # Copy wsjtx_core.dll and MinGW runtime DLLs to build/Release
+          # All dependencies (FFTW, MinGW runtimes) are statically linked into
+          # wsjtx_core.dll — only system DLLs (KERNEL32, msvcrt) remain as imports
           cp build-core/Release/wsjtx_core.dll build/Release/
-          for dll in libgfortran-5.dll libgcc_s_seh-1.dll libstdc++-6.dll libwinpthread-1.dll libfftw3f-3.dll libfftw3f_threads-3.dll libquadmath-0.dll; do
-            [ -f "/mingw64/bin/$dll" ] && cp "/mingw64/bin/$dll" build/Release/
-          done
 
       # Test
       - name: Run tests (Linux/macOS)
@@ -180,9 +178,7 @@ jobs:
           mkdir -p "$TARGET_DIR"
           cp build/Release/wsjtx_lib_nodejs.node "$TARGET_DIR/"
           cp build/Release/wsjtx_core.dll "$TARGET_DIR/"
-          cp build/Release/*.dll "$TARGET_DIR/" 2>/dev/null || true
 
-          # build-info.json
           cat > "$TARGET_DIR/build-info.json" <<EOF
           {"platform":"${{ matrix.platform }}","arch":"${{ matrix.arch }}","build_time":"$(date -u +%Y-%m-%dT%H:%M:%SZ)"}
           EOF
