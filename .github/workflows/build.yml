@@ -228,3 +228,51 @@ jobs:
           name: all-prebuilds
           path: final-prebuilds/
           retention-days: 90
+
+  publish:
+    name: Publish
+    needs: collect-artifacts
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          registry-url: 'https://registry.npmjs.org'
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: all-prebuilds
+          path: prebuilds
+
+      - run: npm ci --ignore-scripts
+      - run: npm run build:ts
+
+      - name: Validate prebuilds
+        run: |
+          for p in linux-x64 linux-arm64 darwin-arm64 darwin-x64 win32-x64; do
+            test -f "prebuilds/$p/wsjtx_lib_nodejs.node" || { echo "Missing: $p"; exit 1; }
+          done
+          echo "All 5 platform prebuilds verified."
+
+      - run: npm publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/}
+          for dir in prebuilds/*/; do
+            platform=$(basename "$dir")
+            tar -czf "wsjtx-lib-${VERSION}-${platform}.tar.gz" -C prebuilds "$platform"
+          done
+          gh release create "$VERSION" --title "$VERSION" --generate-notes \
+            wsjtx-lib-${VERSION}-*.tar.gz

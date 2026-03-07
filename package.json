@@ -32,7 +32,7 @@
     "test:full": "node --test dist/test/wsjtx.test.js",
     "prepare": "npm run build:ts",
     "package": "node scripts/package-prebuilds.js",
-    "prepublishOnly": "npm run build:ts && npm run package"
+    "prepublishOnly": "npm run build:ts"
   },
   "keywords": [
     "wsjtx",
