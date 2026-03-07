@@ -165,12 +165,8 @@ jobs:
                    "$BREW_PREFIX/Cellar/gcc"/*/lib/gcc/current; do
             [ -d "$p" ] && SP_ARGS="$SP_ARGS -s $p"
           done
-          # Step 1: bundle .node deps (including libwsjtx_core.dylib from build/Release)
+          # dylibbundler follows transitive deps: .node → libwsjtx_core.dylib → fftw, gfortran, etc.
           dylibbundler -x "$NODE_FILE" -d "$TARGET_DIR" -p "@loader_path/" $SP_ARGS -b -of
-          # Step 2: bundle libwsjtx_core.dylib's own deps (fftw, gfortran, etc.)
-          if [ -f "$TARGET_DIR/libwsjtx_core.dylib" ]; then
-            dylibbundler -x "$TARGET_DIR/libwsjtx_core.dylib" -d "$TARGET_DIR" -p "@loader_path/" $SP_ARGS -b -of
-          fi
 
           echo '{}' | jq --arg p "${{ matrix.platform }}" --arg a "${{ matrix.arch }}" \
             '{platform: $p, arch: $a, build_time: now | todate}' > "$TARGET_DIR/build-info.json"
