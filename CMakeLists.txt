@@ -1,27 +1,174 @@
 cmake_minimum_required(VERSION 3.15)
 
-# 禁用 vcpkg Manifest 模式，使用经典模式
+# ============================================================================
+# Build modes (for Windows two-phase build):
+#   WSJTX_BUILD_CORE_ONLY  - Build only wsjtx_core shared library (MinGW)
+#   WSJTX_BUILD_NODE_ONLY  - Build only .node module (MSVC, needs wsjtx_core)
+#   Neither                - Build both targets (Linux/macOS, same compiler)
+# ============================================================================
+option(WSJTX_BUILD_CORE_ONLY "Build only wsjtx_core shared library" OFF)
+option(WSJTX_BUILD_NODE_ONLY "Build only .node module (requires pre-built wsjtx_core)" OFF)
+
+# Disable vcpkg manifest mode if detected
 if(DEFINED CMAKE_TOOLCHAIN_FILE AND CMAKE_TOOLCHAIN_FILE MATCHES "vcpkg")
-    set(VCPKG_MANIFEST_MODE OFF CACHE BOOL "Disable vcpkg manifest mode" FORCE)
-    set(VCPKG_MANIFEST_INSTALL OFF CACHE BOOL "Disable vcpkg manifest install" FORCE)
-    message(STATUS "Detected vcpkg toolchain, disabling manifest mode")
+    set(VCPKG_MANIFEST_MODE OFF CACHE BOOL "" FORCE)
+    set(VCPKG_MANIFEST_INSTALL OFF CACHE BOOL "" FORCE)
 endif()
 
-project(wsjtx_lib_nodejs LANGUAGES C CXX Fortran)
+# Project languages depend on build mode
+if(WSJTX_BUILD_NODE_ONLY)
+    project(wsjtx_lib_nodejs LANGUAGES C CXX)
+else()
+    project(wsjtx_lib_nodejs LANGUAGES C CXX Fortran)
+endif()
 
-# Set C++ standard
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-
-# Enable position independent code for all targets (including subprojects)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
-# Include cmake-js - this must come first to get CMAKE_JS_* variables
+# CMake policy for newer Boost versions
+if(POLICY CMP0167)
+    cmake_policy(SET CMP0167 NEW)
+endif()
+
+# ============================================================================
+# Platform-specific compiler flags
+# ============================================================================
+if(UNIX AND NOT APPLE)
+    add_compile_options(-fPIC -fvisibility=hidden)
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-stringop-overflow -Wno-deprecated-declarations")
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wno-stringop-overflow -Wno-deprecated-declarations")
+elseif(APPLE)
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fvisibility=hidden -Wno-deprecated-declarations -Wno-unqualified-std-cast-call")
+elseif(WIN32 AND CMAKE_CXX_COMPILER_ID MATCHES "GNU")
+    # MinGW environment
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fvisibility=hidden -Wno-deprecated-declarations")
+    set(CMAKE_SHARED_LINKER_FLAGS "")
+
+    # MSYS2 paths (check both C: and D: drives)
+    foreach(_msys_root "C:/msys64" "D:/msys64")
+        if(EXISTS "${_msys_root}/mingw64")
+            include_directories("${_msys_root}/mingw64/include")
+            link_directories("${_msys_root}/mingw64/lib")
+            if(EXISTS "${_msys_root}/mingw64/lib/pkgconfig")
+                set(ENV{PKG_CONFIG_PATH} "${_msys_root}/mingw64/lib/pkgconfig")
+            endif()
+            break()
+        endif()
+    endforeach()
+endif()
+
+# ============================================================================
+# NODE-ONLY build path (MSVC on Windows)
+# Only builds the .node module, links against pre-built wsjtx_core
+# ============================================================================
+if(WSJTX_BUILD_NODE_ONLY)
+    if(NOT WSJTX_CORE_DIR)
+        message(FATAL_ERROR "WSJTX_CORE_DIR must be set to the directory containing wsjtx_core.lib and wsjtx_core.dll")
+    endif()
+
+    # cmake-js headers
+    if(CMAKE_JS_INC)
+        include_directories(${CMAKE_JS_INC})
+    endif()
+
+    # Node.js include path
+    execute_process(
+        COMMAND node -p "require('path').dirname(process.execPath) + '/../include/node'"
+        OUTPUT_VARIABLE NODE_INCLUDE_DIR
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET
+    )
+    if(NODE_INCLUDE_DIR AND EXISTS "${NODE_INCLUDE_DIR}")
+        include_directories(${NODE_INCLUDE_DIR})
+    endif()
+
+    # node-addon-api
+    set(NODE_ADDON_API_PATHS
+        "${CMAKE_SOURCE_DIR}/node_modules/node-addon-api"
+        "${CMAKE_SOURCE_DIR}/../../node_modules/node-addon-api"
+    )
+    foreach(path ${NODE_ADDON_API_PATHS})
+        if(EXISTS "${path}/napi.h")
+            set(NODE_ADDON_API_PATH "${path}")
+            break()
+        endif()
+    endforeach()
+    if(NOT NODE_ADDON_API_PATH)
+        message(FATAL_ERROR "Could not find node-addon-api")
+    endif()
+
+    include_directories(
+        ${CMAKE_SOURCE_DIR}/native
+        ${NODE_ADDON_API_PATH}
+    )
+
+    # .node target
+    set(NODE_SOURCES native/wsjtx_wrapper.cpp native/wsjtx_wrapper.h)
+    if(CMAKE_JS_SRC)
+        list(APPEND NODE_SOURCES ${CMAKE_JS_SRC})
+    endif()
+    add_library(${PROJECT_NAME} SHARED ${NODE_SOURCES})
+
+    set_target_properties(${PROJECT_NAME} PROPERTIES PREFIX "" SUFFIX ".node")
+
+    target_compile_definitions(${PROJECT_NAME} PRIVATE
+        NAPI_DISABLE_CPP_EXCEPTIONS
+        BUILDING_NODE_EXTENSION
+        NAPI_VERSION=4
+        NODE_GYP_MODULE_NAME=${PROJECT_NAME}
+    )
+
+    target_include_directories(${PROJECT_NAME} PRIVATE
+        ${CMAKE_JS_INC}
+        "${NODE_ADDON_API_PATH}"
+        "${WSJTX_CORE_DIR}"
+    )
+
+    # Link wsjtx_core import library + Node.js
+    find_library(WSJTX_CORE_LIB
+        NAMES wsjtx_core
+        PATHS "${WSJTX_CORE_DIR}"
+        NO_DEFAULT_PATH
+    )
+    if(NOT WSJTX_CORE_LIB)
+        message(FATAL_ERROR "wsjtx_core.lib not found in ${WSJTX_CORE_DIR}")
+    endif()
+
+    target_link_libraries(${PROJECT_NAME} PRIVATE ${WSJTX_CORE_LIB})
+    if(CMAKE_JS_LIB)
+        target_link_libraries(${PROJECT_NAME} PRIVATE ${CMAKE_JS_LIB})
+    endif()
+
+    # Output to build/Release (handle multi-config generators like VS)
+    set(_OUTPUT_DIR "${CMAKE_BINARY_DIR}/Release")
+    set_target_properties(${PROJECT_NAME} PROPERTIES
+        LIBRARY_OUTPUT_DIRECTORY "${_OUTPUT_DIR}"
+        RUNTIME_OUTPUT_DIRECTORY "${_OUTPUT_DIR}"
+        ARCHIVE_OUTPUT_DIRECTORY "${_OUTPUT_DIR}"
+    )
+    foreach(cfg Debug Release RelWithDebInfo MinSizeRel)
+        string(TOUPPER ${cfg} CFG_UPPER)
+        set_target_properties(${PROJECT_NAME} PROPERTIES
+            LIBRARY_OUTPUT_DIRECTORY_${CFG_UPPER} "${_OUTPUT_DIR}"
+            RUNTIME_OUTPUT_DIRECTORY_${CFG_UPPER} "${_OUTPUT_DIR}"
+            ARCHIVE_OUTPUT_DIRECTORY_${CFG_UPPER} "${_OUTPUT_DIR}"
+        )
+    endforeach()
+
+    return()  # Skip the rest of the file
+endif()
+
+# ============================================================================
+# Full build path (Linux/macOS) or core-only build (Windows MinGW)
+# ============================================================================
+
+# cmake-js headers (needed for full build)
 if(CMAKE_JS_INC)
     include_directories(${CMAKE_JS_INC})
 endif()
 
-# Add Node.js include path for node_api.h (for all platforms)
+# Node.js include path
 execute_process(
     COMMAND node -p "require('path').dirname(process.execPath) + '/../include/node'"
     OUTPUT_VARIABLE NODE_INCLUDE_DIR
@@ -30,346 +177,228 @@ execute_process(
 )
 if(NODE_INCLUDE_DIR AND EXISTS "${NODE_INCLUDE_DIR}")
     include_directories(${NODE_INCLUDE_DIR})
-    message(STATUS "Added Node.js include directory: ${NODE_INCLUDE_DIR}")
 endif()
 
-# **关键修复**: Windows + MinGW 环境检测并清除 MSVC 特定标志
-if(WIN32 AND CMAKE_CXX_COMPILER_ID MATCHES "GNU")
-    message(STATUS "Detected MinGW-w64 environment on Windows")
-    
-    # 设置 PKG_CONFIG_PATH 以便查找 MSYS2 库
-    if(EXISTS "C:/msys64/mingw64/lib/pkgconfig")
-        set(ENV{PKG_CONFIG_PATH} "C:/msys64/mingw64/lib/pkgconfig")
-        message(STATUS "Set PKG_CONFIG_PATH to C:/msys64/mingw64/lib/pkgconfig")
-    endif()
-    
-    # 添加 MSYS2 的 include 和 library 路径
-    if(EXISTS "C:/msys64/mingw64")
-        include_directories("C:/msys64/mingw64/include")
-        link_directories("C:/msys64/mingw64/lib")
-        message(STATUS "Added MSYS2 include and library paths")
-    endif()
-    
-    # **关键**: 清空 cmake-js 可能添加的 MSVC 专属链接标志 (/DELAYLOAD:NODE.EXE)
-    set(CMAKE_SHARED_LINKER_FLAGS "")
-    message(STATUS "Cleared MSVC-specific linker flags for MinGW compatibility")
-endif()
+# ---- Dependencies ----
 
-# Force avoid MSVC detection on Windows when using MinGW
-if(WIN32 AND MSVC)
-    message(FATAL_ERROR "MSVC compiler detected. This project requires MinGW-w64. Please use MSYS2/MinGW-w64 environment and specify -G \"MinGW Makefiles\"")
-endif()
-
-# Additional check for cmake-js on Windows - prevent Visual Studio generator
-if(WIN32 AND CMAKE_GENERATOR MATCHES "Visual Studio")
-    message(FATAL_ERROR "Visual Studio generator detected. This project requires MinGW-w64. Please set CMAKE_GENERATOR=MinGW Makefiles")
-endif()
-
-# Set compiler flags for better compatibility
-if(UNIX AND NOT APPLE)
-    # Linux specific flags
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fPIC -fvisibility=hidden")
-    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fPIC")
-    set(CMAKE_Fortran_FLAGS "${CMAKE_Fortran_FLAGS} -fPIC")
-    
-    # Suppress some warnings that are common in the wsjtx_lib code
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-stringop-overflow -Wno-deprecated-declarations")
-    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wno-stringop-overflow -Wno-deprecated-declarations")
-    
-    # Force PIC for all targets in subdirectories
-    set(CMAKE_POSITION_INDEPENDENT_CODE ON CACHE BOOL "Build position independent code" FORCE)
-    
-    # Additional flags to ensure PIC compilation
-    add_compile_options(-fPIC)
-    set(CMAKE_SHARED_LIBRARY_CXX_FLAGS "${CMAKE_SHARED_LIBRARY_CXX_FLAGS} -fPIC")
-    set(CMAKE_SHARED_LIBRARY_C_FLAGS "${CMAKE_SHARED_LIBRARY_C_FLAGS} -fPIC")
-elseif(APPLE)
-    # macOS specific flags
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fvisibility=hidden")
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-deprecated-declarations -Wno-unqualified-std-cast-call")
-    
-    # Set CMake policy for newer Boost versions
-    if(POLICY CMP0167)
-        cmake_policy(SET CMP0167 NEW)
-    endif()
-elseif(WIN32)
-    # Windows with MinGW-w64 specific flags
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fvisibility=hidden")
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-deprecated-declarations")
-    
-    # Set CMake policy for newer Boost versions
-    if(POLICY CMP0167)
-        cmake_policy(SET CMP0167 NEW)
-    endif()
-endif()
-
-# Use pkg-config for all platforms (including Windows with MSYS2)
 find_package(PkgConfig REQUIRED)
-
-# Set CMake policy for newer Boost versions
-if(POLICY CMP0167)
-    cmake_policy(SET CMP0167 NEW)
-endif()
-
-# Find Boost - use different methods based on platform
-if(WIN32 AND CMAKE_CXX_COMPILER_ID MATCHES "GNU")
-    # Windows with MinGW-w64: try both find_package and manual detection
-    find_package(Boost QUIET)
-    if(NOT Boost_FOUND)
-        # Manual detection for MSYS2 Boost
-        message(STATUS "Boost not found via find_package, trying manual detection...")
-        
-        # Look for Boost in MSYS2 locations
-        find_path(Boost_INCLUDE_DIRS 
-            NAMES boost/version.hpp
-            PATHS /mingw64/include C:/msys64/mingw64/include
-            NO_DEFAULT_PATH
-        )
-        
-        if(Boost_INCLUDE_DIRS)
-            message(STATUS "Found Boost headers at: ${Boost_INCLUDE_DIRS}")
-            set(Boost_FOUND TRUE)
-            # For header-only libraries, we don't need to link anything
-            set(BOOST_LIBRARIES "")
-        else()
-            message(WARNING "Boost headers not found")
-            set(BOOST_LIBRARIES "")
-        endif()
-    else()
-        message(STATUS "Boost found via find_package: ${Boost_VERSION}")
-        set(BOOST_LIBRARIES ${Boost_LIBRARIES})
-    endif()
-else()
-    # Other platforms: use standard find_package
-    find_package(Boost REQUIRED)
-    set(BOOST_LIBRARIES ${Boost_LIBRARIES})
-endif()
-
-# Find FFTW3 using pkg-config
 pkg_check_modules(FFTW3F REQUIRED fftw3f)
 
-# Check for FFTW3 threads support - 改进的检测逻辑
+# FFTW3 threads support
 if(UNIX AND NOT APPLE)
-    # Linux: search in standard locations
-    find_library(FFTW3F_THREADS_LIB 
-        NAMES fftw3f_threads libfftw3f_threads
-        PATHS /usr/lib /usr/local/lib /usr/lib/x86_64-linux-gnu /usr/lib/aarch64-linux-gnu
-    )
+    find_library(FFTW3F_THREADS_LIB NAMES fftw3f_threads
+        PATHS /usr/lib /usr/local/lib /usr/lib/x86_64-linux-gnu /usr/lib/aarch64-linux-gnu)
 elseif(APPLE)
-    # macOS: search in homebrew locations
-    find_library(FFTW3F_THREADS_LIB 
-        NAMES fftw3f_threads libfftw3f_threads
-        PATHS /opt/homebrew/lib /usr/local/lib
-        NO_DEFAULT_PATH
-    )
+    find_library(FFTW3F_THREADS_LIB NAMES fftw3f_threads
+        PATHS /opt/homebrew/lib /usr/local/lib NO_DEFAULT_PATH)
 elseif(WIN32 AND CMAKE_CXX_COMPILER_ID MATCHES "GNU")
-    # Windows with MSYS2/MinGW: use pkg-config if available, otherwise force enable
-    execute_process(
-        COMMAND pkg-config --exists fftw3f
-        RESULT_VARIABLE PKG_CONFIG_FFTW_RESULT
-        OUTPUT_QUIET ERROR_QUIET
-    )
-    
-    if(PKG_CONFIG_FFTW_RESULT EQUAL 0)
-        # FFTW3 found via pkg-config, assume threads support exists
-        message(STATUS "FFTW3 found via pkg-config, enabling threads support")
+    execute_process(COMMAND pkg-config --exists fftw3f RESULT_VARIABLE _r OUTPUT_QUIET ERROR_QUIET)
+    if(_r EQUAL 0)
         set(FFTW3F_THREADS_LIB "fftw3f_threads")
-        set(FFTW_THREADS_LIBRARIES "fftw3f_threads")
-        set(FFTW_HAS_THREADS TRUE)
-    else()
-        message(STATUS "FFTW3 threads support detection failed, disabling")
-        set(FFTW_THREADS_LIBRARIES "")
-        set(FFTW_HAS_THREADS FALSE)
     endif()
-else()
-    # Other Windows: search in mingw64 locations
-    find_library(FFTW3F_THREADS_LIB 
-        NAMES fftw3f_threads libfftw3f_threads
-        PATHS /mingw64/lib D:/msys64/mingw64/lib
-        NO_DEFAULT_PATH
-    )
 endif()
 
 if(FFTW3F_THREADS_LIB)
-    message(STATUS "FFTW3 with threads support found: ${FFTW3F_THREADS_LIB}")
     set(FFTW_THREADS_LIBRARIES fftw3f_threads)
     set(FFTW_HAS_THREADS TRUE)
 else()
-    message(STATUS "FFTW3 threads not found, using single-threaded version")
     set(FFTW_THREADS_LIBRARIES "")
     set(FFTW_HAS_THREADS FALSE)
 endif()
 
-# Auto-detect node-addon-api path (monorepo vs standalone)
-set(NODE_ADDON_API_PATHS
-    "${CMAKE_SOURCE_DIR}/node_modules/node-addon-api"           # Standalone project
-    "${CMAKE_SOURCE_DIR}/../../node_modules/node-addon-api"    # Monorepo (2 levels up)
-    "${CMAKE_SOURCE_DIR}/../../../node_modules/node-addon-api" # Monorepo (3 levels up)
-)
-
-set(NODE_ADDON_API_PATH "")
-foreach(path ${NODE_ADDON_API_PATHS})
-    if(EXISTS "${path}/napi.h")
-        set(NODE_ADDON_API_PATH "${path}")
-        message(STATUS "Found node-addon-api at: ${NODE_ADDON_API_PATH}")
-        break()
+# Boost
+if(WIN32 AND CMAKE_CXX_COMPILER_ID MATCHES "GNU")
+    find_package(Boost QUIET)
+    if(NOT Boost_FOUND)
+        find_path(Boost_INCLUDE_DIRS NAMES boost/version.hpp
+            PATHS /mingw64/include C:/msys64/mingw64/include D:/msys64/mingw64/include NO_DEFAULT_PATH)
+        if(Boost_INCLUDE_DIRS)
+            set(Boost_FOUND TRUE)
+        endif()
     endif()
-endforeach()
+else()
+    find_package(Boost REQUIRED)
+endif()
 
-if(NOT NODE_ADDON_API_PATH)
-    message(FATAL_ERROR "Could not find node-addon-api. Searched paths: ${NODE_ADDON_API_PATHS}")
+# macOS: find gfortran library path
+if(APPLE)
+    find_program(GFORTRAN_EXECUTABLE
+        NAMES gfortran gfortran-14 gfortran-13 gfortran-12 gfortran-11
+        PATHS /opt/homebrew/bin /usr/local/bin)
+    if(NOT GFORTRAN_EXECUTABLE)
+        find_program(GFORTRAN_EXECUTABLE NAMES gfortran gfortran-14 gfortran-13 gfortran-12)
+    endif()
+    if(GFORTRAN_EXECUTABLE)
+        execute_process(COMMAND ${GFORTRAN_EXECUTABLE} --print-file-name=libgfortran.dylib
+            OUTPUT_VARIABLE GFORTRAN_LIB_PATH OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+        if(GFORTRAN_LIB_PATH AND NOT GFORTRAN_LIB_PATH STREQUAL "libgfortran.dylib")
+            get_filename_component(GFORTRAN_LIB_DIR "${GFORTRAN_LIB_PATH}" DIRECTORY)
+            link_directories(${GFORTRAN_LIB_DIR})
+        endif()
+        execute_process(COMMAND ${GFORTRAN_EXECUTABLE} --print-file-name=libgcc_s.1.dylib
+            OUTPUT_VARIABLE LIBGCC_S_PATH OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+        if(LIBGCC_S_PATH AND NOT LIBGCC_S_PATH STREQUAL "libgcc_s.1.dylib")
+            get_filename_component(LIBGCC_S_DIR "${LIBGCC_S_PATH}" DIRECTORY)
+            link_directories(${LIBGCC_S_DIR})
+        endif()
+    endif()
 endif()
 
 # Include directories
 include_directories(
     ${CMAKE_SOURCE_DIR}/wsjtx_lib
     ${CMAKE_SOURCE_DIR}/native
-    ${NODE_ADDON_API_PATH}
     ${FFTW3F_INCLUDE_DIRS}
     ${Boost_INCLUDE_DIRS}
 )
 
-# Define LIBRARIES_FROM_REFERENCES for wsjtx_lib submodule
-set(LIBRARIES_FROM_REFERENCES 
-    ${FFTW3F_LIBRARIES}
-    ${FFTW_THREADS_LIBRARIES}
-)
+# Dependencies for the core library
+set(LIBRARIES_FROM_REFERENCES ${FFTW3F_LIBRARIES} ${FFTW_THREADS_LIBRARIES})
 
-# Platform-specific library setup
-if(APPLE)
-    # Find gfortran library path for macOS - support both Intel and ARM64
-    set(GFORTRAN_SEARCH_PATHS
-        "/opt/homebrew/bin"  # ARM64 (Apple Silicon)
-        "/usr/local/bin"     # x64 (Intel)
-    )
-    
-    # Try to find gfortran in common locations
-    find_program(GFORTRAN_EXECUTABLE 
-        NAMES gfortran gfortran-14 gfortran-13 gfortran-12 gfortran-11
-        PATHS ${GFORTRAN_SEARCH_PATHS}
-        NO_DEFAULT_PATH
-    )
-    
-    # Also try system PATH as fallback
-    if(NOT GFORTRAN_EXECUTABLE)
-        find_program(GFORTRAN_EXECUTABLE 
-            NAMES gfortran gfortran-14 gfortran-13 gfortran-12 gfortran-11
-        )
-    endif()
-    
-    if(GFORTRAN_EXECUTABLE)
-        message(STATUS "Found gfortran: ${GFORTRAN_EXECUTABLE}")
-        
-        # Get library path (but don't set CMAKE_Fortran_COMPILER here to avoid cache conflicts)
-        execute_process(
-            COMMAND ${GFORTRAN_EXECUTABLE} --print-file-name=libgfortran.dylib
-            OUTPUT_VARIABLE GFORTRAN_LIB_PATH
-            OUTPUT_STRIP_TRAILING_WHITESPACE
-            ERROR_QUIET
-        )
-        
-        if(GFORTRAN_LIB_PATH AND NOT GFORTRAN_LIB_PATH STREQUAL "libgfortran.dylib")
-            get_filename_component(GFORTRAN_LIB_DIR "${GFORTRAN_LIB_PATH}" DIRECTORY)
-            
-            # Find libgcc_s.1 for nested function support
-            execute_process(
-                COMMAND ${GFORTRAN_EXECUTABLE} --print-file-name=libgcc_s.1.dylib
-                OUTPUT_VARIABLE LIBGCC_S_PATH
-                OUTPUT_STRIP_TRAILING_WHITESPACE
-                ERROR_QUIET
-            )
-            
-            if(LIBGCC_S_PATH AND NOT LIBGCC_S_PATH STREQUAL "libgcc_s.1.dylib")
-                get_filename_component(LIBGCC_S_DIR "${LIBGCC_S_PATH}" DIRECTORY)
-                link_directories(${LIBGCC_S_DIR})
-            endif()
-            
-            link_directories(${GFORTRAN_LIB_DIR})
-        endif()
-    else()
-        message(WARNING "gfortran not found, Fortran compilation may fail")
-        message(STATUS "Searched in paths: ${GFORTRAN_SEARCH_PATHS}")
-        message(STATUS "You may need to install gfortran: brew install gcc")
-    endif()
-    
-    list(APPEND LIBRARIES_FROM_REFERENCES 
-        "-framework Accelerate"
-        gfortran 
-        gcc_s.1
-    )
-    if(FFTW_HAS_THREADS)
-        list(APPEND LIBRARIES_FROM_REFERENCES fftw3f_threads)
-    endif()
-elseif(UNIX)
-    # Linux specific libraries
-    list(APPEND LIBRARIES_FROM_REFERENCES 
-        gfortran 
-        gcc_s 
-        pthread
-    )
-    if(FFTW_HAS_THREADS)
-        list(APPEND LIBRARIES_FROM_REFERENCES fftw3f_threads)
-    endif()
-elseif(WIN32)
-    # Windows with MinGW-w64 specific libraries
-    list(APPEND LIBRARIES_FROM_REFERENCES 
-        gfortran 
-        gcc_s 
-        pthread
-    )
-    if(FFTW_HAS_THREADS)
-        list(APPEND LIBRARIES_FROM_REFERENCES fftw3f_threads)
-    endif()
-endif()
-
-# Add wsjtx_lib as subdirectory
+# Build the Fortran/C++ core
 add_subdirectory(wsjtx_lib)
-
-# Link directories (must be before creating target)
 link_directories(${FFTW3F_LIBRARY_DIRS})
 
-# Source files for the Node.js addon
-file(GLOB_RECURSE NATIVE_SOURCES "native/*.cpp" "native/*.h")
+# ============================================================================
+# Target 1: wsjtx_core shared library (pure C API)
+# ============================================================================
+add_library(wsjtx_core SHARED native/wsjtx_c_api.cpp native/wsjtx_c_api.h)
 
-# Create the Node.js addon with MinGW-specific handling
-if(WIN32 AND CMAKE_CXX_COMPILER_ID MATCHES "GNU")
-    # MinGW build: exclude Windows delay load hook
-    add_library(${PROJECT_NAME} SHARED 
-        ${NATIVE_SOURCES}
-    )
-    message(STATUS "MinGW build: excluding CMAKE_JS_SRC (Windows delay load hook)")
-else()
-    # Other platforms: include CMAKE_JS_SRC if available
-    if(CMAKE_JS_SRC)
-        add_library(${PROJECT_NAME} SHARED 
-            ${NATIVE_SOURCES}
-            ${CMAKE_JS_SRC}
-        )
-        message(STATUS "Non-MinGW build: including CMAKE_JS_SRC for delay-load hook")
-    else()
-        add_library(${PROJECT_NAME} SHARED 
-            ${NATIVE_SOURCES}
-        )
+target_compile_definitions(wsjtx_core PRIVATE WSJTX_CORE_EXPORTS)
+set_target_properties(wsjtx_core PROPERTIES
+    CXX_VISIBILITY_PRESET hidden
+    C_VISIBILITY_PRESET hidden
+)
+
+target_include_directories(wsjtx_core PRIVATE
+    ${CMAKE_SOURCE_DIR}/wsjtx_lib
+    ${FFTW3F_INCLUDE_DIRS}
+    ${Boost_INCLUDE_DIRS}
+)
+
+target_link_libraries(wsjtx_core PRIVATE
+    wsjtx_lib
+    ${FFTW3F_LIBRARIES}
+)
+
+# Platform-specific linking for wsjtx_core
+if(APPLE)
+    target_link_libraries(wsjtx_core PRIVATE "-framework Accelerate" gfortran gcc_s.1)
+    if(FFTW_HAS_THREADS)
+        target_link_libraries(wsjtx_core PRIVATE fftw3f_threads)
+    endif()
+elseif(UNIX)
+    target_link_libraries(wsjtx_core PRIVATE gfortran gcc_s pthread)
+    if(FFTW_HAS_THREADS)
+        target_link_libraries(wsjtx_core PRIVATE fftw3f_threads)
+    endif()
+elseif(WIN32)
+    target_link_libraries(wsjtx_core PRIVATE gfortran gcc_s pthread)
+    if(FFTW_HAS_THREADS)
+        target_link_libraries(wsjtx_core PRIVATE fftw3f_threads)
     endif()
 endif()
 
-# Set properties for Node.js addon
-set_target_properties(${PROJECT_NAME} PROPERTIES 
-    PREFIX "" 
-    SUFFIX ".node"
-    CXX_VISIBILITY_PRESET hidden
-    POSITION_INDEPENDENT_CODE ON
-)
-
-# Ensure output goes to build/Release across generators and platforms
+# Output wsjtx_core to build/Release alongside .node
 set(_OUTPUT_DIR "${CMAKE_BINARY_DIR}/Release")
-set_target_properties(${PROJECT_NAME} PROPERTIES
+set_target_properties(wsjtx_core PROPERTIES
     LIBRARY_OUTPUT_DIRECTORY "${_OUTPUT_DIR}"
     RUNTIME_OUTPUT_DIRECTORY "${_OUTPUT_DIR}"
     ARCHIVE_OUTPUT_DIRECTORY "${_OUTPUT_DIR}"
 )
 
-# Also set configuration-specific output directories for multi-config generators
+# Linux RPATH
+if(UNIX AND NOT APPLE)
+    set_target_properties(wsjtx_core PROPERTIES
+        BUILD_RPATH "\$ORIGIN"
+        INSTALL_RPATH "\$ORIGIN"
+    )
+endif()
+
+# If core-only build, stop here
+if(WSJTX_BUILD_CORE_ONLY)
+    return()
+endif()
+
+# ============================================================================
+# Target 2: .node N-API module (links wsjtx_core, no Fortran/FFTW needed)
+# ============================================================================
+
+# node-addon-api
+set(NODE_ADDON_API_PATHS
+    "${CMAKE_SOURCE_DIR}/node_modules/node-addon-api"
+    "${CMAKE_SOURCE_DIR}/../../node_modules/node-addon-api"
+    "${CMAKE_SOURCE_DIR}/../../../node_modules/node-addon-api"
+)
+foreach(path ${NODE_ADDON_API_PATHS})
+    if(EXISTS "${path}/napi.h")
+        set(NODE_ADDON_API_PATH "${path}")
+        break()
+    endif()
+endforeach()
+if(NOT NODE_ADDON_API_PATH)
+    message(FATAL_ERROR "Could not find node-addon-api")
+endif()
+
+# .node target
+set(NODE_SOURCES native/wsjtx_wrapper.cpp native/wsjtx_wrapper.h)
+
+if(WIN32 AND CMAKE_CXX_COMPILER_ID MATCHES "GNU")
+    # MinGW: exclude delay load hook
+    add_library(${PROJECT_NAME} SHARED ${NODE_SOURCES})
+elseif(CMAKE_JS_SRC)
+    add_library(${PROJECT_NAME} SHARED ${NODE_SOURCES} ${CMAKE_JS_SRC})
+else()
+    add_library(${PROJECT_NAME} SHARED ${NODE_SOURCES})
+endif()
+
+set_target_properties(${PROJECT_NAME} PROPERTIES
+    PREFIX ""
+    SUFFIX ".node"
+    CXX_VISIBILITY_PRESET hidden
+)
+
+target_compile_definitions(${PROJECT_NAME} PRIVATE
+    NAPI_DISABLE_CPP_EXCEPTIONS
+    BUILDING_NODE_EXTENSION
+    NAPI_VERSION=4
+    NODE_GYP_MODULE_NAME=${PROJECT_NAME}
+)
+
+if(WIN32 AND CMAKE_CXX_COMPILER_ID MATCHES "GNU")
+    target_include_directories(${PROJECT_NAME} PRIVATE
+        "${CMAKE_JS_INC}"
+        "/mingw64/include/node"
+        "/mingw64/include/node/node"
+        "${NODE_ADDON_API_PATH}"
+    )
+else()
+    target_include_directories(${PROJECT_NAME} PRIVATE
+        ${CMAKE_JS_INC}
+        "${NODE_ADDON_API_PATH}"
+    )
+endif()
+
+# Link wsjtx_core (not wsjtx_lib directly)
+target_link_libraries(${PROJECT_NAME} PRIVATE wsjtx_core)
+
+# Node.js library
+if(WIN32 AND CMAKE_CXX_COMPILER_ID MATCHES "GNU")
+    if(EXISTS "${CMAKE_JS_LIB}")
+        set(LOCAL_NODE_LIB "${CMAKE_BINARY_DIR}/node.lib")
+        configure_file("${CMAKE_JS_LIB}" "${LOCAL_NODE_LIB}" COPYONLY)
+        target_link_libraries(${PROJECT_NAME} PRIVATE "${LOCAL_NODE_LIB}")
+    endif()
+elseif(CMAKE_JS_LIB)
+    target_link_libraries(${PROJECT_NAME} PRIVATE ${CMAKE_JS_LIB})
+endif()
+
+# Output directories
+set_target_properties(${PROJECT_NAME} PROPERTIES
+    LIBRARY_OUTPUT_DIRECTORY "${_OUTPUT_DIR}"
+    RUNTIME_OUTPUT_DIRECTORY "${_OUTPUT_DIR}"
+    ARCHIVE_OUTPUT_DIRECTORY "${_OUTPUT_DIR}"
+)
 foreach(cfg Debug Release RelWithDebInfo MinSizeRel)
     string(TOUPPER ${cfg} CFG_UPPER)
     set_target_properties(${PROJECT_NAME} PROPERTIES
@@ -379,109 +408,10 @@ foreach(cfg Debug Release RelWithDebInfo MinSizeRel)
     )
 endforeach()
 
-# On Linux, ensure the module can find bundled .so beside the .node via RPATH
+# Linux RPATH for .node
 if(UNIX AND NOT APPLE)
-    # Use $ORIGIN so the loader searches the .node's directory
     set_target_properties(${PROJECT_NAME} PROPERTIES
         BUILD_RPATH "\$ORIGIN"
         INSTALL_RPATH "\$ORIGIN"
     )
-endif()
-
-# 设置 Node.js 和 node-addon-api 头文件路径（仅针对 C++ 目标）
-if(WIN32 AND CMAKE_CXX_COMPILER_ID MATCHES "GNU")
-    # Windows MinGW: 使用 MSYS2 的 Node.js 头文件 + 项目的 node-addon-api
-    target_include_directories(${PROJECT_NAME} PRIVATE 
-        "${CMAKE_JS_INC}"
-        "/mingw64/include/node"
-        "/mingw64/include/node/node"
-        "/mingw64/include"
-        "${NODE_ADDON_API_PATH}"
-    )
-    message(STATUS "MinGW build: using MSYS2 Node.js headers and local node-addon-api")
-    message(STATUS "CMAKE_JS_INC: ${CMAKE_JS_INC}")
-else()
-    # 其他平台：使用 cmake-js 提供的头文件路径 + 项目的 node-addon-api
-    target_include_directories(${PROJECT_NAME} PRIVATE 
-        ${CMAKE_JS_INC}
-        "${NODE_ADDON_API_PATH}"
-    )
-    message(STATUS "Using cmake-js provided headers: ${CMAKE_JS_INC}")
-endif()
-
-# Compiler-specific options
-target_compile_definitions(${PROJECT_NAME} PRIVATE 
-    NAPI_DISABLE_CPP_EXCEPTIONS
-    BUILDING_NODE_EXTENSION
-    NAPI_VERSION=4
-    NODE_GYP_MODULE_NAME=${PROJECT_NAME}
-)
-
-# Add compile flags
-target_compile_options(${PROJECT_NAME} PRIVATE ${FFTW3F_CFLAGS_OTHER})
-
-# Link libraries with MinGW-specific handling
-if(WIN32 AND CMAKE_CXX_COMPILER_ID MATCHES "GNU")
-    # Windows MinGW: 复制库文件到本地目录避免路径问题
-    set(LOCAL_NODE_LIB "${CMAKE_BINARY_DIR}/node.lib")
-    
-    # 检查并复制 Node.js 库文件
-    if(EXISTS "${CMAKE_JS_LIB}")
-        message(STATUS "Copying Node.js library from: ${CMAKE_JS_LIB}")
-        configure_file("${CMAKE_JS_LIB}" "${LOCAL_NODE_LIB}" COPYONLY)
-        target_link_libraries(${PROJECT_NAME} PRIVATE "${LOCAL_NODE_LIB}")
-        message(STATUS "MinGW build: Using copied Node.js library: ${LOCAL_NODE_LIB}")
-    else()
-        message(STATUS "MinGW build: CMAKE_JS_LIB not found, skipping Node.js library linking")
-    endif()
-else()
-    # Other platforms: link CMAKE_JS_LIB if available
-    if(CMAKE_JS_LIB)
-        target_link_libraries(${PROJECT_NAME} PRIVATE ${CMAKE_JS_LIB})
-        message(STATUS "Using cmake-js provided library: ${CMAKE_JS_LIB}")
-    endif()
-endif()
-
-target_link_libraries(${PROJECT_NAME} PRIVATE
-    wsjtx_lib
-    ${FFTW3F_LIBRARIES}
-    ${BOOST_LIBRARIES}
-)
-
-# Platform-specific linking
-if(APPLE)
-    target_link_libraries(${PROJECT_NAME} PRIVATE
-        "-framework Accelerate"
-        gfortran 
-        gcc_s.1
-    )
-    if(FFTW_HAS_THREADS)
-        target_link_libraries(${PROJECT_NAME} PRIVATE fftw3f_threads)
-    endif()
-elseif(UNIX)
-    target_link_libraries(${PROJECT_NAME} PRIVATE
-        gfortran 
-        gcc_s 
-        pthread
-    )
-    if(FFTW_HAS_THREADS)
-        target_link_libraries(${PROJECT_NAME} PRIVATE fftw3f_threads)
-    endif()
-    
-    # Linux specific linker flags for Node.js extensions
-    # Note: We don't use --no-undefined because Node.js extensions
-    # have symbols that are resolved at runtime by the Node.js process
-    target_link_options(${PROJECT_NAME} PRIVATE 
-        -Wl,--as-needed
-    )
-elseif(WIN32)
-    # Windows with MinGW-w64 linking
-    target_link_libraries(${PROJECT_NAME} PRIVATE
-        gfortran 
-        gcc_s 
-        pthread
-    )
-    if(FFTW_HAS_THREADS)
-        target_link_libraries(${PROJECT_NAME} PRIVATE fftw3f_threads)
-    endif()
 endif()

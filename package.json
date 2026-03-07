@@ -22,16 +22,17 @@
   ],
   "scripts": {
     "build": "npm run build:native && npm run build:ts",
-    "build:win": "npm run build:native:win && npm run build:ts",
     "build:native": "cmake-js compile",
-    "build:native:win": "cmake-js compile --generator=\"MinGW Makefiles\"",
+    "build:win": "npm run build:win:core && npm run build:win:node && npm run build:ts",
+    "build:win:core": "echo 'Run in MSYS2 MinGW64 shell: mkdir -p build-core && cd build-core && cmake .. -G \"MinGW Makefiles\" -DWSJTX_BUILD_CORE_ONLY=ON -DCMAKE_BUILD_TYPE=Release && mingw32-make -j$(nproc)'",
+    "build:win:node": "cmake-js compile --CDWSJTX_BUILD_NODE_ONLY=ON --CDWSJTX_CORE_DIR=build-core",
     "build:ts": "tsc",
     "clean": "cmake-js clean && rimraf dist",
     "test": "node --test dist/test/wsjtx.basic.test.js",
     "test:full": "node --test dist/test/wsjtx.test.js",
     "prepare": "npm run build:ts",
     "package": "node scripts/package-prebuilds.js",
-    "prepublishOnly": "npm run build:ts && npm run package"
+    "prepublishOnly": "npm run build:ts"
   },
   "keywords": [
     "wsjtx",
