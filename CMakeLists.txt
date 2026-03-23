@@ -291,6 +291,10 @@ elseif(UNIX)
     if(FFTW_HAS_THREADS)
         target_link_libraries(wsjtx_core PRIVATE fftw3f_threads)
     endif()
+    # Prevent execstack: modern kernels (and OrbStack) reject dlopen of .so with PT_GNU_STACK RWE.
+    # Safe because wsjtx_lib Fortran code has no nested internal procedures (no CONTAINS),
+    # so gfortran never generates trampolines requiring executable stack.
+    target_link_options(wsjtx_core PRIVATE -Wl,-z,noexecstack)
 elseif(WIN32)
     # Static-link ALL non-system dependencies so wsjtx_core.dll only depends
     # on Windows system DLLs (KERNEL32.dll, msvcrt.dll). This prevents DLL
@@ -416,8 +420,9 @@ foreach(cfg Debug Release RelWithDebInfo MinSizeRel)
     )
 endforeach()
 
-# Linux RPATH for .node
+# Linux RPATH for .node + prevent execstack
 if(UNIX AND NOT APPLE)
+    target_link_options(${PROJECT_NAME} PRIVATE -Wl,-z,noexecstack)
     set_target_properties(${PROJECT_NAME} PROPERTIES
         BUILD_RPATH "\$ORIGIN"
         INSTALL_RPATH "\$ORIGIN"
