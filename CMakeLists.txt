@@ -38,6 +38,13 @@ if(UNIX AND NOT APPLE)
     add_compile_options(-fPIC -fvisibility=hidden)
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-stringop-overflow -Wno-deprecated-declarations")
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wno-stringop-overflow -Wno-deprecated-declarations")
+    # Disable stack-based trampolines in Fortran code.
+    # Required together with -Wl,-z,noexecstack: modern kernels (OrbStack 6.17+) reject
+    # dlopen of .so with PT_GNU_STACK RWE. -fno-trampolines tells gfortran to use
+    # register-based (non-stack) trampolines for internal procedure pointers.
+    # If this causes a compile error, the Fortran code has nested procedure arguments
+    # that require restructuring. GCC 9+ on aarch64 supports this without libffi.
+    add_compile_options($<$<COMPILE_LANGUAGE:Fortran>:-fno-trampolines>)
 elseif(APPLE)
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fvisibility=hidden -Wno-deprecated-declarations -Wno-unqualified-std-cast-call")
 elseif(WIN32 AND CMAKE_CXX_COMPILER_ID MATCHES "GNU")
