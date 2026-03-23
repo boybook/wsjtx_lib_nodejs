@@ -38,13 +38,6 @@ if(UNIX AND NOT APPLE)
     add_compile_options(-fPIC -fvisibility=hidden)
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-stringop-overflow -Wno-deprecated-declarations")
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wno-stringop-overflow -Wno-deprecated-declarations")
-    # Disable stack-based trampolines in Fortran code.
-    # Required together with -Wl,-z,noexecstack: modern kernels (OrbStack 6.17+) reject
-    # dlopen of .so with PT_GNU_STACK RWE. -fno-trampolines tells gfortran to use
-    # register-based (non-stack) trampolines for internal procedure pointers.
-    # If this causes a compile error, the Fortran code has nested procedure arguments
-    # that require restructuring. GCC 9+ on aarch64 supports this without libffi.
-    add_compile_options($<$<COMPILE_LANGUAGE:Fortran>:-fno-trampolines>)
 elseif(APPLE)
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fvisibility=hidden -Wno-deprecated-declarations -Wno-unqualified-std-cast-call")
 elseif(WIN32 AND CMAKE_CXX_COMPILER_ID MATCHES "GNU")
@@ -298,10 +291,6 @@ elseif(UNIX)
     if(FFTW_HAS_THREADS)
         target_link_libraries(wsjtx_core PRIVATE fftw3f_threads)
     endif()
-    # Prevent execstack: modern kernels (and OrbStack) reject dlopen of .so with PT_GNU_STACK RWE.
-    # Safe because wsjtx_lib Fortran code has no nested internal procedures (no CONTAINS),
-    # so gfortran never generates trampolines requiring executable stack.
-    target_link_options(wsjtx_core PRIVATE -Wl,-z,noexecstack)
 elseif(WIN32)
     # Static-link ALL non-system dependencies so wsjtx_core.dll only depends
     # on Windows system DLLs (KERNEL32.dll, msvcrt.dll). This prevents DLL
@@ -427,9 +416,8 @@ foreach(cfg Debug Release RelWithDebInfo MinSizeRel)
     )
 endforeach()
 
-# Linux RPATH for .node + prevent execstack
+# Linux RPATH for .node
 if(UNIX AND NOT APPLE)
-    target_link_options(${PROJECT_NAME} PRIVATE -Wl,-z,noexecstack)
     set_target_properties(${PROJECT_NAME} PROPERTIES
         BUILD_RPATH "\$ORIGIN"
         INSTALL_RPATH "\$ORIGIN"
