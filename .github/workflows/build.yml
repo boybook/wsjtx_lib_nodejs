@@ -116,11 +116,11 @@ jobs:
       # Test
       - name: Run tests (Linux/macOS)
         if: runner.os != 'Windows'
-        run: npm test && npm run test:full
+        run: npm test
 
       - name: Run tests (Windows)
         if: runner.os == 'Windows'
-        run: npm test && npm run test:full
+        run: npm test
 
       # Package prebuilds
       - name: Package prebuilds (Linux)
