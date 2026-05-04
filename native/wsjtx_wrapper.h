@@ -58,25 +58,14 @@ protected:
  */
 class DecodeWorker : public AsyncWorkerBase {
 public:
-    DecodeWorker(Napi::Function& callback, wsjtx_handle_t handle,
-                 int mode, const std::vector<float>& audioData,
-                 int frequency, int threads);
-
-    DecodeWorker(Napi::Function& callback, wsjtx_handle_t handle,
-                 int mode, const std::vector<short int>& audioData,
-                 int frequency, int threads);
-
+    DecodeWorker(Napi::Function& cb, wsjtx_handle_t h, int mode, const std::vector<float>& d, const wsjtx_decode_options_t& o);
+    DecodeWorker(Napi::Function& cb, wsjtx_handle_t h, int mode, const std::vector<short int>& d, const wsjtx_decode_options_t& o);
 protected:
-    void Execute() override;
-    void OnOK() override;
-
+    void Execute() override; void OnOK() override;
 private:
-    int mode_;
-    std::vector<float> floatData_;
-    std::vector<short int> intData_;
-    bool useFloat_;
-    int frequency_;
-    int threads_;
+    static constexpr int MAX_MSGS = 200;
+    int mode_; std::vector<float> floatData_; std::vector<short int> intData_; bool useFloat_;
+    wsjtx_decode_options_t options_; std::vector<wsjtx_message_t> messages_; int numMessages_ = 0;
 };
 
 /**
