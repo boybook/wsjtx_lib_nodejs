@@ -227,19 +227,19 @@ WSJTX_API double wsjtx_get_transmission_duration(int mode) {
     return MODE_TABLE[mode].duration;
 }
 
-int wsjtx_decode_float_v2(wsjtx_handle_t h, int mode, const float* s, int n, const wsjtx_decode_options_t* o) {
+WSJTX_API int wsjtx_decode_float_v2(wsjtx_handle_t h, int mode, const float* s, int n, const wsjtx_decode_options_t* o) {
   if (!h||!o) return WSJTX_ERR_INVALID_HANDLE;
   try { auto* L=to_lib(h); if(o->hiscall[0]) L->setDxCall(o->hiscall); if(o->hisgrid[0]) L->setDxGrid(o->hisgrid);
     std::vector<float> d(s,s+n); L->decode((wsjtxMode)mode,d,o->frequency,o->threads); return WSJTX_OK; }
   catch(...){return WSJTX_ERR_EXCEPTION;}
 }
-int wsjtx_decode_int16_v2(wsjtx_handle_t h, int mode, const int16_t* s, int n, const wsjtx_decode_options_t* o) {
+WSJTX_API int wsjtx_decode_int16_v2(wsjtx_handle_t h, int mode, const int16_t* s, int n, const wsjtx_decode_options_t* o) {
   if (!h||!o) return WSJTX_ERR_INVALID_HANDLE;
   try { auto* L=to_lib(h); if(o->hiscall[0]) L->setDxCall(o->hiscall); if(o->hisgrid[0]) L->setDxGrid(o->hisgrid);
     std::vector<short> d(s,s+n); L->decode((wsjtxMode)mode,d,o->frequency,o->threads); return WSJTX_OK; }
   catch(...){return WSJTX_ERR_EXCEPTION;}
 }
-int wsjtx_pull_messages(wsjtx_handle_t h, wsjtx_message_t* out, int max) {
+WSJTX_API int wsjtx_pull_messages(wsjtx_handle_t h, wsjtx_message_t* out, int max) {
   if(!h||!out) return 0; auto* L=to_lib(h); int c=0; WsjtxMessage m;
   while(c<max&&L->pullMessage(m)){out[c].hh=m.hh;out[c].min=m.min;out[c].sec=m.sec;out[c].snr=m.snr;out[c].freq=m.freq;out[c].sync=m.sync;out[c].dt=m.dt;strncpy(out[c].msg,m.msg.c_str(),63);out[c].msg[63]=0;c++;} return c;
 }
