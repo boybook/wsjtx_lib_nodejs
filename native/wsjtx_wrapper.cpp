@@ -53,55 +53,34 @@ namespace wsjtx_nodejs
     {
         Napi::Env env = info.Env();
 
-        if (info.Length() < 5)
-        {
-            Napi::TypeError::New(env, "Expected 5 arguments: mode, audioData, frequency, threads, callback")
-                .ThrowAsJavaScriptException();
+        if (info.Length() < 4) {
+            Napi::TypeError::New(env, "Expected: mode, audioData, options, callback").ThrowAsJavaScriptException();
             return env.Null();
         }
-
-        if (!info[0].IsNumber() || !info[2].IsNumber() || !info[3].IsNumber() || !info[4].IsFunction())
-        {
-            Napi::TypeError::New(env, "Invalid argument types").ThrowAsJavaScriptException();
-            return env.Null();
-        }
-
         int mode = info[0].As<Napi::Number>().Int32Value();
-        int frequency = info[2].As<Napi::Number>().Int32Value();
-        int threads = info[3].As<Napi::Number>().Int32Value();
-        Napi::Function callback = info[4].As<Napi::Function>();
+        Napi::Object optObj = info[2].As<Napi::Object>();
+        Napi::Function callback = info[3].As<Napi::Function>();
 
-        try {
-            ValidateMode(env, mode);
-            ValidateFrequency(env, frequency);
-            ValidateThreads(env, threads);
-        } catch (const std::exception &e) {
-            Napi::Error::New(env, e.what()).ThrowAsJavaScriptException();
-            return env.Null();
-        }
+        wsjtx_decode_options_t opts = {};
+        opts.frequency = optObj.Get("frequency").As<Napi::Number>().Int32Value();
+        opts.threads   = optObj.Has("threads") ? optObj.Get("threads").As<Napi::Number>().Int32Value() : 4;
+        opts.low_freq  = optObj.Has("lowFreq") ? optObj.Get("lowFreq").As<Napi::Number>().Int32Value() : 200;
+        opts.high_freq = optObj.Has("highFreq") ? optObj.Get("highFreq").As<Napi::Number>().Int32Value() : 4000;
+        opts.tolerance = optObj.Has("tolerance") ? optObj.Get("tolerance").As<Napi::Number>().Int32Value() : 20;
+        if (optObj.Has("dxCall")) { auto s = optObj.Get("dxCall").As<Napi::String>().Utf8Value(); strncpy(opts.hiscall, s.c_str(), 12); }
+        if (optObj.Has("dxGrid")) { auto s = optObj.Get("dxGrid").As<Napi::String>().Utf8Value(); strncpy(opts.hisgrid, s.c_str(), 6); }
 
         Napi::Value audioData = info[1];
-        if (!audioData.IsTypedArray()) {
-            Napi::TypeError::New(env, "Audio data must be a typed array").ThrowAsJavaScriptException();
-            return env.Null();
-        }
-
         Napi::TypedArray typedArray = audioData.As<Napi::TypedArray>();
-
         if (typedArray.TypedArrayType() == napi_float32_array) {
             auto floatData = ConvertToFloatArray(env, audioData);
-            auto worker = new DecodeWorker(callback, handle_, mode, floatData, frequency, threads);
-            worker->Queue();
+            auto worker = new DecodeWorker(callback, handle_, mode, floatData, opts); worker->Queue();
         } else if (typedArray.TypedArrayType() == napi_int16_array) {
             auto intData = ConvertToIntArray(env, audioData);
-            auto worker = new DecodeWorker(callback, handle_, mode, intData, frequency, threads);
-            worker->Queue();
+            auto worker = new DecodeWorker(callback, handle_, mode, intData, opts); worker->Queue();
         } else {
-            Napi::TypeError::New(env, "Audio data must be Float32Array or Int16Array")
-                .ThrowAsJavaScriptException();
-            return env.Null();
+            Napi::TypeError::New(env, "Audio data must be Float32Array or Int16Array").ThrowAsJavaScriptException();
         }
-
         return env.Undefined();
     }
 
@@ -387,33 +366,36 @@ namespace wsjtx_nodejs
         : Napi::AsyncWorker(callback), handle_(handle) {}
 
     // DecodeWorker (float)
-    DecodeWorker::DecodeWorker(Napi::Function &callback, wsjtx_handle_t handle,
-                               int mode, const std::vector<float> &audioData,
-                               int frequency, int threads)
-        : AsyncWorkerBase(callback, handle), mode_(mode), floatData_(audioData),
-          frequency_(frequency), threads_(threads), useFloat_(true) {}
+    DecodeWorker::DecodeWorker(Napi::Function &cb, wsjtx_handle_t h,
+                               int mode, const std::vector<float> &d,
+                               const wsjtx_decode_options_t& o)
+        : AsyncWorkerBase(cb, h), mode_(mode), floatData_(d),
+          options_(o), useFloat_(true) {}
 
     // DecodeWorker (int16)
-    DecodeWorker::DecodeWorker(Napi::Function &callback, wsjtx_handle_t handle,
-                               int mode, const std::vector<short int> &audioData,
-                               int frequency, int threads)
-        : AsyncWorkerBase(callback, handle), mode_(mode), intData_(audioData),
-          frequency_(frequency), threads_(threads), useFloat_(false) {}
+    DecodeWorker::DecodeWorker(Napi::Function &cb, wsjtx_handle_t h,
+                               int mode, const std::vector<short int> &d,
+                               const wsjtx_decode_options_t& o)
+        : AsyncWorkerBase(cb, h), mode_(mode), intData_(d),
+          options_(o), useFloat_(false) {}
 
     void DecodeWorker::Execute()
     {
         int rc;
         if (useFloat_) {
-            rc = wsjtx_decode_float(handle_, mode_,
+            rc = wsjtx_decode_float_v2(handle_, mode_,
                 floatData_.data(), static_cast<int>(floatData_.size()),
-                frequency_, threads_);
+                &options_);
         } else {
-            rc = wsjtx_decode_int16(handle_, mode_,
+            rc = wsjtx_decode_int16_v2(handle_, mode_,
                 reinterpret_cast<int16_t*>(intData_.data()),
                 static_cast<int>(intData_.size()),
-                frequency_, threads_);
+                &options_);
         }
-        if (rc != WSJTX_OK) {
+        if (rc == WSJTX_OK) {
+            messages_.resize(MAX_MSGS);
+            numMessages_ = wsjtx_pull_messages(handle_, messages_.data(), MAX_MSGS);
+        } else {
             SetError("Decode failed with error code " + std::to_string(rc));
         }
     }
@@ -421,7 +403,21 @@ namespace wsjtx_nodejs
     void DecodeWorker::OnOK()
     {
         Napi::Env env = Env();
-        Callback().Call({env.Null(), Napi::Boolean::New(env, true)});
+        auto msgs = Napi::Array::New(env, numMessages_);
+        for (int i = 0; i < numMessages_; i++) {
+            auto o = Napi::Object::New(env);
+            o.Set("text", Napi::String::New(env, messages_[i].msg));
+            o.Set("snr", Napi::Number::New(env, messages_[i].snr));
+            o.Set("deltaTime", Napi::Number::New(env, messages_[i].dt));
+            o.Set("deltaFrequency", Napi::Number::New(env, messages_[i].freq));
+            o.Set("timestamp", Napi::Number::New(env, messages_[i].hh * 3600 + messages_[i].min * 60 + messages_[i].sec));
+            o.Set("sync", Napi::Number::New(env, messages_[i].sync));
+            msgs[i] = o;
+        }
+        auto result = Napi::Object::New(env);
+        result.Set("messages", msgs);
+        result.Set("success", Napi::Boolean::New(env, true));
+        Callback().Call({env.Null(), result});
     }
 
     // EncodeWorker

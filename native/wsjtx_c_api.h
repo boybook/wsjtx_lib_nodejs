@@ -171,3 +171,9 @@ WSJTX_API double wsjtx_get_transmission_duration(int mode);
 #endif
 
 #endif /* WSJTX_C_API_H */
+
+/* v2 decode with options */
+typedef struct { int frequency; int threads; int low_freq; int high_freq; int tolerance; char hiscall[13]; char hisgrid[7]; } wsjtx_decode_options_t;
+WSJTX_API int wsjtx_decode_float_v2(wsjtx_handle_t, int mode, const float* samples, int n, const wsjtx_decode_options_t* opts);
+WSJTX_API int wsjtx_decode_int16_v2(wsjtx_handle_t, int mode, const int16_t* samples, int n, const wsjtx_decode_options_t* opts);
+WSJTX_API int wsjtx_pull_messages(wsjtx_handle_t, wsjtx_message_t* out, int max);

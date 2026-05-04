@@ -22,7 +22,7 @@ else()
     project(wsjtx_lib_nodejs LANGUAGES C CXX Fortran)
 endif()
 
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
