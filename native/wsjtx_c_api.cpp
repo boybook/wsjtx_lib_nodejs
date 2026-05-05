@@ -44,6 +44,15 @@ static inline wsjtx_lib* to_lib(wsjtx_handle_t h) {
     return static_cast<wsjtx_lib*>(h);
 }
 
+/* Apply v2 decode options (dxCall, dxGrid, freq range) onto the lib instance.
+ * Empty hiscall/hisgrid leave existing dx info unchanged on the instance.
+ * Range fields are always applied so callers get deterministic behavior. */
+static void apply_decode_options(wsjtx_lib* lib, const wsjtx_decode_options_t* opts) {
+    if (opts->hiscall[0]) lib->setDxCall(std::string(opts->hiscall));
+    if (opts->hisgrid[0]) lib->setDxGrid(std::string(opts->hisgrid));
+    lib->setDecodeRange(opts->low_freq, opts->high_freq, opts->tolerance);
+}
+
 /* ---- Lifecycle ---- */
 
 WSJTX_API wsjtx_handle_t wsjtx_create(void) {
@@ -58,7 +67,7 @@ WSJTX_API void wsjtx_destroy(wsjtx_handle_t handle) {
     delete to_lib(handle);
 }
 
-/* ---- Decode ---- */
+/* ---- Decode (legacy) ---- */
 
 WSJTX_API int wsjtx_decode_float(wsjtx_handle_t handle, int mode,
     float* samples, int num_samples, int freq, int threads)
@@ -84,6 +93,44 @@ WSJTX_API int wsjtx_decode_int16(wsjtx_handle_t handle, int mode,
     try {
         std::vector<short int> data(samples, samples + num_samples);
         to_lib(handle)->decode(static_cast<wsjtxMode>(mode), data, freq, threads);
+        return WSJTX_OK;
+    } catch (...) {
+        return WSJTX_ERR_EXCEPTION;
+    }
+}
+
+/* ---- Decode (v2 with options) ---- */
+
+WSJTX_API int wsjtx_decode_float_v2(wsjtx_handle_t handle, int mode,
+    const float* samples, int num_samples,
+    const wsjtx_decode_options_t* options)
+{
+    if (!handle || !options) return WSJTX_ERR_INVALID_HANDLE;
+    if (!valid_mode(mode)) return WSJTX_ERR_INVALID_MODE;
+
+    try {
+        wsjtx_lib* lib = to_lib(handle);
+        apply_decode_options(lib, options);
+        std::vector<float> data(samples, samples + num_samples);
+        lib->decode(static_cast<wsjtxMode>(mode), data, options->frequency, options->threads);
+        return WSJTX_OK;
+    } catch (...) {
+        return WSJTX_ERR_EXCEPTION;
+    }
+}
+
+WSJTX_API int wsjtx_decode_int16_v2(wsjtx_handle_t handle, int mode,
+    const int16_t* samples, int num_samples,
+    const wsjtx_decode_options_t* options)
+{
+    if (!handle || !options) return WSJTX_ERR_INVALID_HANDLE;
+    if (!valid_mode(mode)) return WSJTX_ERR_INVALID_MODE;
+
+    try {
+        wsjtx_lib* lib = to_lib(handle);
+        apply_decode_options(lib, options);
+        std::vector<short int> data(samples, samples + num_samples);
+        lib->decode(static_cast<wsjtxMode>(mode), data, options->frequency, options->threads);
         return WSJTX_OK;
     } catch (...) {
         return WSJTX_ERR_EXCEPTION;
@@ -126,25 +173,45 @@ WSJTX_API int wsjtx_encode(wsjtx_handle_t handle, int mode, int freq,
 
 /* ---- Message queue ---- */
 
+static void copy_message(wsjtx_message_t* dst, const WsjtxMessage& src) {
+    dst->hh   = src.hh;
+    dst->min  = src.min;
+    dst->sec  = src.sec;
+    dst->snr  = src.snr;
+    dst->freq = src.freq;
+    dst->sync = src.sync;
+    dst->dt   = src.dt;
+    memset(dst->msg, 0, sizeof(dst->msg));
+    strncpy(dst->msg, src.msg.c_str(), sizeof(dst->msg) - 1);
+}
+
 WSJTX_API int wsjtx_pull_message(wsjtx_handle_t handle, wsjtx_message_t* out_msg) {
     if (!handle || !out_msg) return 0;
 
     try {
         WsjtxMessage msg;
         if (!to_lib(handle)->pullMessage(msg)) return 0;
-
-        out_msg->hh   = msg.hh;
-        out_msg->min  = msg.min;
-        out_msg->sec  = msg.sec;
-        out_msg->snr  = msg.snr;
-        out_msg->freq = msg.freq;
-        out_msg->sync = msg.sync;
-        out_msg->dt   = msg.dt;
-
-        memset(out_msg->msg, 0, sizeof(out_msg->msg));
-        strncpy(out_msg->msg, msg.msg.c_str(), sizeof(out_msg->msg) - 1);
-
+        copy_message(out_msg, msg);
         return 1;
+    } catch (...) {
+        return 0;
+    }
+}
+
+WSJTX_API int wsjtx_pull_messages(wsjtx_handle_t handle,
+    wsjtx_message_t* out_messages, int max_messages)
+{
+    if (!handle || !out_messages || max_messages <= 0) return 0;
+
+    try {
+        wsjtx_lib* lib = to_lib(handle);
+        WsjtxMessage msg;
+        int count = 0;
+        while (count < max_messages && lib->pullMessage(msg)) {
+            copy_message(&out_messages[count], msg);
+            count++;
+        }
+        return count;
     } catch (...) {
         return 0;
     }
@@ -225,21 +292,4 @@ WSJTX_API int wsjtx_get_sample_rate(int mode) {
 WSJTX_API double wsjtx_get_transmission_duration(int mode) {
     if (!valid_mode(mode)) return 60.0;
     return MODE_TABLE[mode].duration;
-}
-
-WSJTX_API int wsjtx_decode_float_v2(wsjtx_handle_t h, int mode, const float* s, int n, const wsjtx_decode_options_t* o) {
-  if (!h||!o) return WSJTX_ERR_INVALID_HANDLE;
-  try { auto* L=to_lib(h); if(o->hiscall[0]) L->setDxCall(o->hiscall); if(o->hisgrid[0]) L->setDxGrid(o->hisgrid);
-    std::vector<float> d(s,s+n); L->decode((wsjtxMode)mode,d,o->frequency,o->threads); return WSJTX_OK; }
-  catch(...){return WSJTX_ERR_EXCEPTION;}
-}
-WSJTX_API int wsjtx_decode_int16_v2(wsjtx_handle_t h, int mode, const int16_t* s, int n, const wsjtx_decode_options_t* o) {
-  if (!h||!o) return WSJTX_ERR_INVALID_HANDLE;
-  try { auto* L=to_lib(h); if(o->hiscall[0]) L->setDxCall(o->hiscall); if(o->hisgrid[0]) L->setDxGrid(o->hisgrid);
-    std::vector<short> d(s,s+n); L->decode((wsjtxMode)mode,d,o->frequency,o->threads); return WSJTX_OK; }
-  catch(...){return WSJTX_ERR_EXCEPTION;}
-}
-WSJTX_API int wsjtx_pull_messages(wsjtx_handle_t h, wsjtx_message_t* out, int max) {
-  if(!h||!out) return 0; auto* L=to_lib(h); int c=0; WsjtxMessage m;
-  while(c<max&&L->pullMessage(m)){out[c].hh=m.hh;out[c].min=m.min;out[c].sec=m.sec;out[c].snr=m.snr;out[c].freq=m.freq;out[c].sync=m.sync;out[c].dt=m.dt;strncpy(out[c].msg,m.msg.c_str(),63);out[c].msg[63]=0;c++;} return c;
 }
