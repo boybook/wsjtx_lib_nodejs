@@ -92,6 +92,25 @@ typedef struct {
     int cycles;
 } wsjtx_decoder_result_t;
 
+/* Decode options for v2 API.
+ * - frequency: nominal QSO frequency in Hz (passed as nfqso to the decoder)
+ * - threads:   thread hint forwarded to the decoder (1..N)
+ * - low_freq:  decoder scan low limit in Hz  (default 200)
+ * - high_freq: decoder scan high limit in Hz (default 4000)
+ * - tolerance: frequency tolerance in Hz     (default 20)
+ * - hiscall:   DX callsign for AP decode (empty = none)
+ * - hisgrid:   DX 4-char grid for AP decode (empty = none)
+ */
+typedef struct {
+    int frequency;
+    int threads;
+    int low_freq;
+    int high_freq;
+    int tolerance;
+    char hiscall[13];
+    char hisgrid[7];
+} wsjtx_decode_options_t;
+
 /* ---- Lifecycle ---- */
 
 WSJTX_API wsjtx_handle_t wsjtx_create(void);
@@ -100,7 +119,7 @@ WSJTX_API void wsjtx_destroy(wsjtx_handle_t handle);
 /* ---- Decode ---- */
 
 /**
- * Decode audio samples (float format).
+ * Decode audio samples (float format) — legacy API.
  * Results are placed in the internal message queue; use wsjtx_pull_message() to retrieve.
  * Returns WSJTX_OK on success, negative error code on failure.
  */
@@ -108,12 +127,29 @@ WSJTX_API int wsjtx_decode_float(wsjtx_handle_t handle, int mode,
     float* samples, int num_samples, int freq, int threads);
 
 /**
- * Decode audio samples (int16 format).
+ * Decode audio samples (int16 format) — legacy API.
  * Results are placed in the internal message queue; use wsjtx_pull_message() to retrieve.
  * Returns WSJTX_OK on success, negative error code on failure.
  */
 WSJTX_API int wsjtx_decode_int16(wsjtx_handle_t handle, int mode,
     int16_t* samples, int num_samples, int freq, int threads);
+
+/**
+ * Decode audio samples (float format) with full options — v2 API.
+ * Applies dxCall/dxGrid (for A8 list decode) and the decode frequency range
+ * before invoking the decoder. Results are placed in the internal queue;
+ * use wsjtx_pull_messages() to retrieve them in batch.
+ */
+WSJTX_API int wsjtx_decode_float_v2(wsjtx_handle_t handle, int mode,
+    const float* samples, int num_samples,
+    const wsjtx_decode_options_t* options);
+
+/**
+ * Decode audio samples (int16 format) with full options — v2 API.
+ */
+WSJTX_API int wsjtx_decode_int16_v2(wsjtx_handle_t handle, int mode,
+    const int16_t* samples, int num_samples,
+    const wsjtx_decode_options_t* options);
 
 /* ---- Encode ---- */
 
@@ -141,6 +177,13 @@ WSJTX_API int wsjtx_encode(wsjtx_handle_t handle, int mode, int freq,
  */
 WSJTX_API int wsjtx_pull_message(wsjtx_handle_t handle, wsjtx_message_t* out_msg);
 
+/**
+ * Pull up to `max_messages` decoded messages from the queue in one call.
+ * Returns the number of messages written into `out_messages` (>= 0).
+ */
+WSJTX_API int wsjtx_pull_messages(wsjtx_handle_t handle,
+    wsjtx_message_t* out_messages, int max_messages);
+
 /* ---- WSPR ---- */
 
 /**
@@ -165,12 +208,6 @@ WSJTX_API int wsjtx_is_encoding_supported(int mode);
 WSJTX_API int wsjtx_is_decoding_supported(int mode);
 WSJTX_API int wsjtx_get_sample_rate(int mode);
 WSJTX_API double wsjtx_get_transmission_duration(int mode);
-
-/* v2 decode with options */
-typedef struct { int frequency; int threads; int low_freq; int high_freq; int tolerance; char hiscall[13]; char hisgrid[7]; } wsjtx_decode_options_t;
-WSJTX_API int wsjtx_decode_float_v2(wsjtx_handle_t, int mode, const float* samples, int n, const wsjtx_decode_options_t* opts);
-WSJTX_API int wsjtx_decode_int16_v2(wsjtx_handle_t, int mode, const int16_t* samples, int n, const wsjtx_decode_options_t* opts);
-WSJTX_API int wsjtx_pull_messages(wsjtx_handle_t, wsjtx_message_t* out, int max);
 
 #ifdef __cplusplus
 }
