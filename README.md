@@ -192,7 +192,7 @@ Encode a message into audio waveform for transmission.
 
 **Parameters:**
 - `mode`: WSJTXMode enum value
-- `message`: Message text to encode (1-22 characters)
+- `message`: Message text to encode (FT8/FT4 structured messages: 1-37 characters; free text payloads are limited by WSJT-X to 13 characters)
 - `frequency`: Audio frequency in Hz (typically 500-3000 Hz)
 - `threads`: Number of threads to use (optional, default: 4)
 

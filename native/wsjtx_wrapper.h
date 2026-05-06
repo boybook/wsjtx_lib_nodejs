@@ -33,7 +33,7 @@ private:
     void ValidateMode(Napi::Env env, int mode);
     void ValidateFrequency(Napi::Env env, int frequency);
     void ValidateThreads(Napi::Env env, int threads);
-    void ValidateMessage(Napi::Env env, const std::string& message);
+    void ValidateMessage(Napi::Env env, int mode, const std::string& message);
 
     std::vector<float> ConvertToFloatArray(Napi::Env env, const Napi::Value& audioData);
     std::vector<short int> ConvertToIntArray(Napi::Env env, const Napi::Value& audioData);

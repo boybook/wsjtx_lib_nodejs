@@ -164,6 +164,38 @@ describe('WSJTX library — regression', () => {
       });
     }
 
+    it('FT8 encodes 23-character structured nonstandard-call messages', async () => {
+      const messages = [
+        '<VA7CD/DU7> BG5DRB RR73',
+        '<VA7CD/DU7> BG5DRB R-09',
+      ];
+
+      for (const msg of messages) {
+        const result = await lib.encode(WSJTXMode.FT8, msg, 1500);
+        assert.strictEqual(result.messageSent.trim(), msg);
+        assert.ok(result.audioData.length > 0);
+      }
+    });
+
+    it('FT4 encodes 23-character structured nonstandard-call messages', async () => {
+      const msg = '<VA7CD/DU7> BG5DRB RR73';
+      const result = await lib.encode(WSJTXMode.FT4, msg, 1500);
+      assert.strictEqual(result.messageSent.trim(), msg);
+      assert.ok(result.audioData.length > 0);
+    });
+
+    it('rejects FT8 messages longer than 37 characters', async () => {
+      await assert.rejects(
+        () => lib.encode(WSJTXMode.FT8, 'A'.repeat(38), 1500),
+        /Message must be 1\.\.37 characters/,
+      );
+    });
+
+    it('exposes WSJT-X free-text truncation through messageSent', async () => {
+      const result = await lib.encode(WSJTXMode.FT8, 'THIS IS CUSTOM TEXT', 1500);
+      assert.strictEqual(result.messageSent.trim(), 'THIS IS CUSTO');
+    });
+
     it('encoded audio has non-trivial dynamic range', async () => {
       const result = await lib.encode(WSJTXMode.FT8, 'CQ TEST K1ABC FN20', 1500);
       let min = result.audioData[0];

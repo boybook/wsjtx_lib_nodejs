@@ -114,7 +114,7 @@ namespace wsjtx_nodejs
             ValidateMode(env, mode);
             ValidateFrequency(env, frequency);
             ValidateThreads(env, threads);
-            ValidateMessage(env, message);
+            ValidateMessage(env, mode, message);
         } catch (const std::exception &e) {
             Napi::Error::New(env, e.what()).ThrowAsJavaScriptException();
             return env.Null();
@@ -331,9 +331,15 @@ namespace wsjtx_nodejs
             throw std::invalid_argument("Thread count must be between 1 and 16");
     }
 
-    void WSJTXLibWrapper::ValidateMessage(Napi::Env env, const std::string &message) {
-        if (message.empty() || message.length() > 22)
-            throw std::invalid_argument("Message must be 1-22 characters long");
+    void WSJTXLibWrapper::ValidateMessage(Napi::Env env, int mode, const std::string &message) {
+        if (message.empty()) {
+            throw std::invalid_argument("Message must not be empty");
+        }
+
+        const size_t maxLength = (mode == WSJTX_MODE_FT8 || mode == WSJTX_MODE_FT4) ? 37 : 22;
+        if (message.length() > maxLength) {
+            throw std::invalid_argument("Message must be 1-" + std::to_string(maxLength) + " characters long");
+        }
     }
 
     std::vector<float> WSJTXLibWrapper::ConvertToFloatArray(Napi::Env env, const Napi::Value& value) {
