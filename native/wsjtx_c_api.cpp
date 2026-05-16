@@ -32,6 +32,7 @@ static const ModeMetadata MODE_TABLE[] = {
     /* FST4W   */ { 12000, 120.0, 0, 1 },
     /* JT65JT9 */ { 11025, 46.8,  0, 1 },
     /* WSPR    */ { 12000, 110.6, 0, 1 },
+    /* MSK144  */ { 48000, 15.0,  1, 1 },
 };
 
 static const int MODE_COUNT = sizeof(MODE_TABLE) / sizeof(MODE_TABLE[0]);

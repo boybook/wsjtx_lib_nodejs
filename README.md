@@ -28,6 +28,9 @@ A high-performance Node.js C++ extension for digital amateur radio protocols, pr
 | FST4W| ❌       | ✅       | 12 kHz      | 120.0s   | Variable  |
 | WSPR | ❌       | ✅       | 12 kHz      | 110.6s   | ~6 Hz     |
 
+MSK144 support is exposed as mode `WSJTXMode.MSK144` with 48 kHz encoded
+audio, 15-second transmissions, standard 77-bit messages, and MSK144 short
+message forms such as `<KA1ABC WB9XYZ> R-03`.
 ## Installation
 
 ### NPM Installation (Recommended)
@@ -247,7 +250,8 @@ enum WSJTXMode {
     FST4 = 5,
     Q65 = 6,
     FST4W = 7,
-    WSPR = 8
+    WSPR = 9,
+    MSK144 = 10
 }
 ```
 

@@ -51,7 +51,8 @@ typedef enum {
     WSJTX_MODE_Q65     = 6,
     WSJTX_MODE_FST4W   = 7,
     WSJTX_MODE_JT65JT9 = 8,
-    WSJTX_MODE_WSPR    = 9
+    WSJTX_MODE_WSPR    = 9,
+    WSJTX_MODE_MSK144  = 10
 } wsjtx_mode_t;
 
 /* Decoded message (C-compatible version of WsjtxMessage) */

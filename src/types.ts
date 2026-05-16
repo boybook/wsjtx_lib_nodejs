@@ -13,6 +13,7 @@ export enum WSJTXMode {
   FST4W = 7,
   JT65JT9 = 8,
   WSPR = 9,
+  MSK144 = 10,
 }
 
 export type AudioData = Float32Array | Int16Array;
@@ -46,6 +47,10 @@ export interface WSJTXMessage {
  * - apDecode: enables FT8/FT4 AP decode passes. Defaults to true.
  * - decodeDepth: WSJT-X decoder depth. Defaults to 1.
  * - qsoProgress: WSJT-X QSO progress stage. Defaults to 0.
+ *
+ * MSK144 uses 1500 Hz as the nominal audio center frequency. Its decoder is
+ * typically used with a 300-2700 Hz passband and wider tolerance (100-200 Hz)
+ * than FT8/FT4; when omitted, the wrapper applies 300 / 2700 / 100 defaults.
  */
 export interface DecodeOptions {
   frequency: number;

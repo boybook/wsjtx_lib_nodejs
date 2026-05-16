@@ -113,9 +113,22 @@ describe('WSJTX library — regression', () => {
       assert.ok(lib.isDecodingSupported(WSJTXMode.WSPR));
     });
 
-    it('mode capabilities array covers all 10 modes', () => {
+    it('MSK144 sample rate is 48 kHz', () => {
+      assert.strictEqual(lib.getSampleRate(WSJTXMode.MSK144), 48000);
+    });
+
+    it('MSK144 transmission duration is 15.0 s', () => {
+      assert.strictEqual(lib.getTransmissionDuration(WSJTXMode.MSK144), 15.0);
+    });
+
+    it('MSK144 supports both encoding and decoding', () => {
+      assert.ok(lib.isEncodingSupported(WSJTXMode.MSK144));
+      assert.ok(lib.isDecodingSupported(WSJTXMode.MSK144));
+    });
+
+    it('mode capabilities array covers all 11 modes', () => {
       const caps = lib.getAllModeCapabilities();
-      assert.strictEqual(caps.length, 10);
+      assert.strictEqual(caps.length, 11);
       assert.ok(caps.every((c) => c.sampleRate > 0 && c.duration > 0));
     });
 
@@ -124,6 +137,7 @@ describe('WSJTX library — regression', () => {
       assert.strictEqual(WSJTXMode.FT4, 1);
       assert.strictEqual(WSJTXMode.JT65JT9, 8);
       assert.strictEqual(WSJTXMode.WSPR, 9);
+      assert.strictEqual(WSJTXMode.MSK144, 10);
     });
   });
 
@@ -184,6 +198,21 @@ describe('WSJTX library — regression', () => {
       assert.ok(result.audioData.length > 0);
     });
 
+    it('MSK144 encodes standard messages', async () => {
+      const result = await lib.encode(WSJTXMode.MSK144, 'K1ABC W9XYZ EN37', 1500);
+      assert.strictEqual(result.messageSent.trim(), 'K1ABC W9XYZ EN37');
+      assert.ok(result.audioData instanceof Float32Array);
+      assert.ok(
+        result.audioData.length >= 700_000 && result.audioData.length <= 730_000,
+        `unexpected sample count: ${result.audioData.length}`,
+      );
+    });
+
+    it('MSK144 encodes short messages', async () => {
+      const result = await lib.encode(WSJTXMode.MSK144, '<KA1ABC WB9XYZ> R-03', 1500);
+      assert.strictEqual(result.messageSent.trim(), '<KA1ABC WB9XYZ> R-03');
+      assert.ok(result.audioData.length >= 700_000 && result.audioData.length <= 730_000);
+    });
     it('rejects FT8 messages longer than 37 characters', async () => {
       await assert.rejects(
         () => lib.encode(WSJTXMode.FT8, 'A'.repeat(38), 1500),
@@ -323,6 +352,17 @@ describe('WSJTX library — regression', () => {
       assert.strictEqual(r.success, true);
     });
 
+    it('MSK144 silence decode succeeds with empty messages', async () => {
+      const silence = new Float32Array(ENCODE_SAMPLE_RATE * 15);
+      const r = await lib.decode(WSJTXMode.MSK144, silence, {
+        frequency: 1500,
+        threads: 1,
+        tolerance: 100,
+        decodeDepth: 1,
+      });
+      assert.strictEqual(r.success, true);
+      assert.deepStrictEqual(r.messages, []);
+    });
     it('decode with very narrow scan window still succeeds (does not crash)', async () => {
       const r = await lib.decode(WSJTXMode.FT8, silence, {
         frequency: 1500,

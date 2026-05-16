@@ -39,11 +39,19 @@ describe('WSJTX library — smoke', () => {
     assert.strictEqual(WSJTXMode.FT4, 1);
     assert.strictEqual(WSJTXMode.JT65JT9, 8);
     assert.strictEqual(WSJTXMode.WSPR, 9);
+    assert.strictEqual(WSJTXMode.MSK144, 10);
   });
 
-  it('returns capabilities for all 10 modes', () => {
+  it('returns capabilities for all 11 modes', () => {
     const caps = lib.getAllModeCapabilities();
-    assert.strictEqual(caps.length, 10);
+    assert.strictEqual(caps.length, 11);
+  });
+
+  it('reports MSK144 supports both encode and decode', () => {
+    assert.ok(lib.isEncodingSupported(WSJTXMode.MSK144));
+    assert.ok(lib.isDecodingSupported(WSJTXMode.MSK144));
+    assert.strictEqual(lib.getSampleRate(WSJTXMode.MSK144), 48000);
+    assert.strictEqual(lib.getTransmissionDuration(WSJTXMode.MSK144), 15.0);
   });
 
   it('rejects invalid mode in decode', async () => {

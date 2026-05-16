@@ -323,7 +323,7 @@ namespace wsjtx_nodejs
     // ---- Helpers ----
 
     void WSJTXLibWrapper::ValidateMode(Napi::Env env, int mode) {
-        if (mode < 0 || mode > WSJTX_MODE_WSPR)
+        if (mode < 0 || mode > WSJTX_MODE_MSK144)
             throw std::invalid_argument("Invalid mode value");
     }
 
@@ -342,7 +342,8 @@ namespace wsjtx_nodejs
             throw std::invalid_argument("Message must not be empty");
         }
 
-        const size_t maxLength = (mode == WSJTX_MODE_FT8 || mode == WSJTX_MODE_FT4) ? 37 : 22;
+        const size_t maxLength = (mode == WSJTX_MODE_FT8 || mode == WSJTX_MODE_FT4 ||
+                                  mode == WSJTX_MODE_MSK144) ? 37 : 22;
         if (message.length() > maxLength) {
             throw std::invalid_argument("Message must be 1-" + std::to_string(maxLength) + " characters long");
         }
@@ -441,7 +442,8 @@ namespace wsjtx_nodejs
 
     void EncodeWorker::Execute()
     {
-        // FT8 at 48kHz for 12.64s = ~607,000 samples; 1M buffer is plenty
+        // FT8 at 48kHz for 12.64s is ~607k samples; MSK144-15 is 720k.
+        // 1M samples leaves room for all currently supported encoders.
         static const int MAX_SAMPLES = 1024 * 1024;
         audioData_.resize(MAX_SAMPLES);
         int numSamples = 0;
