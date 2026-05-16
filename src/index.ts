@@ -81,12 +81,9 @@ const FREQ_MAX = 30_000_000;
 const THREADS_MIN = 1;
 const THREADS_MAX = 16;
 const MESSAGE_MAX_LEN = 37;
-<<<<<<< HEAD
-=======
 const MSK144_DEFAULT_LOW_FREQ = 300;
 const MSK144_DEFAULT_HIGH_FREQ = 2700;
 const MSK144_DEFAULT_TOLERANCE = 100;
->>>>>>> master
 
 export class WSJTXLib {
   private readonly native: NativeWSJTXLib;
@@ -109,15 +106,9 @@ export class WSJTXLib {
       frequency: options.frequency,
       txFrequency: options.txFrequency ?? options.frequency,
       threads: options.threads ?? this.config.maxThreads,
-<<<<<<< HEAD
-      lowFreq: options.lowFreq ?? this.config.defaultLowFreq,
-      highFreq: options.highFreq ?? this.config.defaultHighFreq,
-      tolerance: options.tolerance ?? this.config.defaultTolerance,
-=======
       lowFreq: options.lowFreq ?? this.defaultLowFreq(mode),
       highFreq: options.highFreq ?? this.defaultHighFreq(mode),
       tolerance: options.tolerance ?? this.defaultTolerance(mode),
->>>>>>> master
       myCall: options.myCall ?? '',
       myGrid: options.myGrid ?? '',
       dxCall: options.dxCall ?? '',
@@ -251,8 +242,6 @@ export class WSJTXLib {
       throw new WSJTXError('audioData must be a non-empty Float32Array or Int16Array', 'INVALID');
     }
   }
-<<<<<<< HEAD
-=======
 
   private defaultLowFreq(mode: WSJTXMode): number {
     return mode === WSJTXMode.MSK144 ? MSK144_DEFAULT_LOW_FREQ : this.config.defaultLowFreq;
@@ -265,7 +254,6 @@ export class WSJTXLib {
   private defaultTolerance(mode: WSJTXMode): number {
     return mode === WSJTXMode.MSK144 ? MSK144_DEFAULT_TOLERANCE : this.config.defaultTolerance;
   }
->>>>>>> master
 }
 
 export { WSJTXMode, WSJTXError };

@@ -45,7 +45,7 @@ should AP be implemented? For each message type/QSO state that will use
 AP decoding, need to create an AP decoding table that defines the number and 
 type of AP decoding passes. 
 
-==========================================================================
+ ==========================================================================
 The following are just ideas:
 
 - Options to sort/filter decoded signals
