@@ -1,0 +1,274 @@
+name: Build and Package
+
+on:
+  push:
+    branches: [main, develop]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+
+env:
+  NODE_VERSION: '20'
+
+jobs:
+  build:
+    name: Build ${{ matrix.platform }}-${{ matrix.arch }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest,     arch: x64,   platform: linux,  node_arch: x64   }
+          - { os: ubuntu-24.04-arm,  arch: arm64, platform: linux,  node_arch: arm64 }
+          - { os: macos-latest,      arch: arm64, platform: darwin, node_arch: arm64 }
+          - { os: macos-15-intel,    arch: x64,   platform: darwin, node_arch: x64   }
+          - { os: windows-latest,    arch: x64,   platform: win32,  node_arch: x64   }
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          architecture: ${{ matrix.node_arch }}
+
+      # Linux dependencies
+      - name: Install dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake build-essential gfortran libfftw3-dev libboost-all-dev pkg-config patchelf
+
+      # macOS dependencies
+      - name: Install dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install cmake fftw boost gcc pkg-config dylibbundler
+          BREW_PREFIX=$([[ "${{ matrix.arch }}" == "arm64" ]] && echo "/opt/homebrew" || echo "/usr/local")
+          echo "${BREW_PREFIX}/bin" >> $GITHUB_PATH
+          GFORTRAN_PATH=$(find ${BREW_PREFIX}/bin -name "gfortran*" | head -1)
+          echo "FC=$GFORTRAN_PATH" >> $GITHUB_ENV
+          echo "CMAKE_Fortran_COMPILER=$GFORTRAN_PATH" >> $GITHUB_ENV
+          echo "LIBRARY_PATH=${BREW_PREFIX}/lib:$LIBRARY_PATH" >> $GITHUB_ENV
+
+      # Windows: MSYS2 for core DLL build
+      - name: Setup MSYS2 (Windows)
+        if: runner.os == 'Windows'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            base-devel
+            mingw-w64-x86_64-toolchain
+            mingw-w64-x86_64-cmake
+            mingw-w64-x86_64-pkg-config
+            mingw-w64-x86_64-fftw
+            mingw-w64-x86_64-boost
+            mingw-w64-x86_64-gcc-fortran
+
+      - run: npm ci --ignore-scripts
+      - run: npm run build:ts
+
+      # Build native: Linux/macOS (single-step, both targets)
+      - name: Build native module (Linux/macOS)
+        if: runner.os != 'Windows'
+        run: |
+          rm -rf build/
+          npx cmake-js compile --arch=${{ matrix.arch }}
+
+      # Build native: Windows Phase 1 - wsjtx_core.dll with MinGW
+      - name: Build wsjtx_core.dll (Windows MinGW)
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: |
+          export PKG_CONFIG_PATH="/mingw64/lib/pkgconfig"
+          export CC=gcc CXX=g++ FC=gfortran CMAKE_MAKE_PROGRAM=mingw32-make
+          unset VSINSTALLDIR VCINSTALLDIR WindowsSDKDir VCPKG_ROOT
+
+          rm -rf build-core/ && mkdir build-core && cd build-core
+          cmake .. -G "MinGW Makefiles" -DWSJTX_BUILD_CORE_ONLY=ON -DCMAKE_BUILD_TYPE=Release
+          mingw32-make -j$(nproc)
+
+          # Generate MSVC-compatible import library
+          cp Release/libwsjtx_core.dll Release/wsjtx_core.dll
+          gendef Release/wsjtx_core.dll
+          dlltool -d wsjtx_core.def -l Release/wsjtx_core.lib -D wsjtx_core.dll
+          cp ../native/wsjtx_c_api.h Release/
+
+      # Build native: Windows Phase 2 - .node with MSVC
+      - name: Build .node module (Windows MSVC)
+        if: runner.os == 'Windows'
+        run: npx cmake-js compile --CDWSJTX_BUILD_NODE_ONLY=ON --CDWSJTX_CORE_DIR=build-core/Release
+
+      # Windows: Copy DLLs for runtime
+      - name: Prepare Windows runtime (Windows)
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: |
+          # All dependencies (FFTW, MinGW runtimes) are statically linked into
+          # wsjtx_core.dll — only system DLLs (KERNEL32, msvcrt) remain as imports
+          cp build-core/Release/wsjtx_core.dll build/Release/
+
+      # Test
+      - name: Run tests (Linux/macOS)
+        if: runner.os != 'Windows'
+        run: npm test
+
+      - name: Run tests (Windows)
+        if: runner.os == 'Windows'
+        run: npm test
+
+      # Package prebuilds
+      - name: Package prebuilds (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          TARGET_DIR="prebuilds/${{ matrix.platform }}-${{ matrix.arch }}"
+          mkdir -p "$TARGET_DIR"
+          cp build/Release/wsjtx_lib_nodejs.node "$TARGET_DIR/"
+          NODE_FILE="$TARGET_DIR/wsjtx_lib_nodejs.node"
+
+          # Copy libwsjtx_core.so
+          cp build/Release/libwsjtx_core.so "$TARGET_DIR/" 2>/dev/null || true
+
+          # Bundle runtime shared libraries
+          ldd "$NODE_FILE" | awk '{print $3}' | while read lib; do
+            if [ -f "$lib" ] && [[ "$lib" == *libfftw* || "$lib" == *libgfortran* || "$lib" == *libgcc* || "$lib" == *libquadmath* || "$lib" == *libstdc++* ]]; then
+              cp -n "$lib" "$TARGET_DIR/" 2>/dev/null || true
+            fi
+          done
+          patchelf --set-rpath '$ORIGIN' "$NODE_FILE" || true
+          patchelf --set-rpath '$ORIGIN' "$TARGET_DIR/libwsjtx_core.so" 2>/dev/null || true
+
+          echo '{}' | jq --arg p "${{ matrix.platform }}" --arg a "${{ matrix.arch }}" \
+            '{platform: $p, arch: $a, build_time: now | todate}' > "$TARGET_DIR/build-info.json"
+          ls -la "$TARGET_DIR"
+
+      - name: Package prebuilds (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          TARGET_DIR="prebuilds/${{ matrix.platform }}-${{ matrix.arch }}"
+          mkdir -p "$TARGET_DIR"
+          cp build/Release/wsjtx_lib_nodejs.node "$TARGET_DIR/"
+          NODE_FILE="$TARGET_DIR/wsjtx_lib_nodejs.node"
+
+          # Bundle dylibs (dylibbundler copies dependencies automatically)
+          BREW_PREFIX=$(brew --prefix 2>/dev/null || echo "/opt/homebrew")
+          SP_ARGS="-s build/Release"
+          for p in "$BREW_PREFIX/opt/fftw/lib" "$BREW_PREFIX/opt/gcc@14/lib/gcc/14" \
+                   "$BREW_PREFIX/opt/gcc/lib/gcc/current" "$BREW_PREFIX/Cellar/fftw"/*/lib \
+                   "$BREW_PREFIX/Cellar/gcc"/*/lib/gcc/current; do
+            [ -d "$p" ] && SP_ARGS="$SP_ARGS -s $p"
+          done
+          # dylibbundler follows transitive deps: .node → libwsjtx_core.dylib → fftw, gfortran, etc.
+          dylibbundler -x "$NODE_FILE" -d "$TARGET_DIR" -p "@loader_path/" $SP_ARGS -b -of
+
+          echo '{}' | jq --arg p "${{ matrix.platform }}" --arg a "${{ matrix.arch }}" \
+            '{platform: $p, arch: $a, build_time: now | todate}' > "$TARGET_DIR/build-info.json"
+          ls -la "$TARGET_DIR"
+
+      - name: Package prebuilds (Windows)
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: |
+          TARGET_DIR="prebuilds/${{ matrix.platform }}-${{ matrix.arch }}"
+          mkdir -p "$TARGET_DIR"
+          cp build/Release/wsjtx_lib_nodejs.node "$TARGET_DIR/"
+          cp build/Release/wsjtx_core.dll "$TARGET_DIR/"
+
+          cat > "$TARGET_DIR/build-info.json" <<EOF
+          {"platform":"${{ matrix.platform }}","arch":"${{ matrix.arch }}","build_time":"$(date -u +%Y-%m-%dT%H:%M:%SZ)"}
+          EOF
+          ls -la "$TARGET_DIR"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: prebuilt-${{ matrix.platform }}-${{ matrix.arch }}
+          path: prebuilds/
+          retention-days: 30
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: build-debug-${{ matrix.platform }}-${{ matrix.arch }}
+          path: |
+            build/
+            build-core/
+          retention-days: 7
+
+  collect-artifacts:
+    name: Collect Artifacts
+    needs: build
+    runs-on: ubuntu-latest
+    if: always() && needs.build.result == 'success'
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: all-artifacts
+
+      - name: Organize artifacts
+        run: |
+          mkdir -p final-prebuilds
+          for dir in all-artifacts/prebuilt-*; do
+            [ -d "$dir" ] && cp -r "$dir"/* final-prebuilds/
+          done
+          echo "Platforms built:"
+          find final-prebuilds -name "*.node" -exec ls -la {} \;
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: all-prebuilds
+          path: final-prebuilds/
+          retention-days: 90
+
+  publish:
+    name: Publish
+    needs: collect-artifacts
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          registry-url: 'https://registry.npmjs.org'
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: all-prebuilds
+          path: prebuilds
+
+      - run: npm ci --ignore-scripts
+      - run: npm run build:ts
+
+      - name: Validate prebuilds
+        run: |
+          for p in linux-x64 linux-arm64 darwin-arm64 darwin-x64 win32-x64; do
+            test -f "prebuilds/$p/wsjtx_lib_nodejs.node" || { echo "Missing: $p"; exit 1; }
+          done
+          echo "All 5 platform prebuilds verified."
+
+      - run: npm publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/}
+          for dir in prebuilds/*/; do
+            platform=$(basename "$dir")
+            tar -czf "wsjtx-lib-${VERSION}-${platform}.tar.gz" -C prebuilds "$platform"
+          done
+          gh release create "$VERSION" --title "$VERSION" --generate-notes \
+            wsjtx-lib-${VERSION}-*.tar.gz
