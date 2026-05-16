@@ -113,11 +113,6 @@ describe('WSJTX library — regression', () => {
       assert.ok(lib.isDecodingSupported(WSJTXMode.WSPR));
     });
 
-<<<<<<< HEAD
-    it('mode capabilities array covers all 10 modes', () => {
-      const caps = lib.getAllModeCapabilities();
-      assert.strictEqual(caps.length, 10);
-=======
     it('MSK144 sample rate is 48 kHz', () => {
       assert.strictEqual(lib.getSampleRate(WSJTXMode.MSK144), 48000);
     });
@@ -134,7 +129,6 @@ describe('WSJTX library — regression', () => {
     it('mode capabilities array covers all 11 modes', () => {
       const caps = lib.getAllModeCapabilities();
       assert.strictEqual(caps.length, 11);
->>>>>>> master
       assert.ok(caps.every((c) => c.sampleRate > 0 && c.duration > 0));
     });
 
@@ -143,10 +137,7 @@ describe('WSJTX library — regression', () => {
       assert.strictEqual(WSJTXMode.FT4, 1);
       assert.strictEqual(WSJTXMode.JT65JT9, 8);
       assert.strictEqual(WSJTXMode.WSPR, 9);
-<<<<<<< HEAD
-=======
       assert.strictEqual(WSJTXMode.MSK144, 10);
->>>>>>> master
     });
   });
 
@@ -207,8 +198,6 @@ describe('WSJTX library — regression', () => {
       assert.ok(result.audioData.length > 0);
     });
 
-<<<<<<< HEAD
-=======
     it('MSK144 encodes standard messages', async () => {
       const result = await lib.encode(WSJTXMode.MSK144, 'K1ABC W9XYZ EN37', 1500);
       assert.strictEqual(result.messageSent.trim(), 'K1ABC W9XYZ EN37');
@@ -224,8 +213,6 @@ describe('WSJTX library — regression', () => {
       assert.strictEqual(result.messageSent.trim(), '<KA1ABC WB9XYZ> R-03');
       assert.ok(result.audioData.length >= 700_000 && result.audioData.length <= 730_000);
     });
-
->>>>>>> master
     it('rejects FT8 messages longer than 37 characters', async () => {
       await assert.rejects(
         () => lib.encode(WSJTXMode.FT8, 'A'.repeat(38), 1500),
@@ -365,8 +352,6 @@ describe('WSJTX library — regression', () => {
       assert.strictEqual(r.success, true);
     });
 
-<<<<<<< HEAD
-=======
     it('MSK144 silence decode succeeds with empty messages', async () => {
       const silence = new Float32Array(ENCODE_SAMPLE_RATE * 15);
       const r = await lib.decode(WSJTXMode.MSK144, silence, {
@@ -378,8 +363,6 @@ describe('WSJTX library — regression', () => {
       assert.strictEqual(r.success, true);
       assert.deepStrictEqual(r.messages, []);
     });
-
->>>>>>> master
     it('decode with very narrow scan window still succeeds (does not crash)', async () => {
       const r = await lib.decode(WSJTXMode.FT8, silence, {
         frequency: 1500,
