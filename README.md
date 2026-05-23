@@ -24,7 +24,7 @@ A high-performance Node.js C++ extension for digital amateur radio protocols, pr
 | JT65 | ❌       | ✅       | 11.025 kHz  | 46.8s    | ~180 Hz   |
 | JT9  | ❌       | ✅       | 12 kHz      | 49.0s    | ~16 Hz    |
 | FST4 | ❌       | ✅       | 12 kHz      | 60.0s    | Variable  |
-| Q65  | ❌       | ✅       | 12 kHz      | 60.0s    | Variable  |
+| Q65  | ✅       | ✅       | 12 kHz      | 30/60/120/300s | Variable  |
 | FST4W| ❌       | ✅       | 12 kHz      | 120.0s   | Variable  |
 | WSPR | ❌       | ✅       | 12 kHz      | 110.6s   | ~6 Hz     |
 
@@ -140,19 +140,16 @@ async function example() {
     console.log(`Generated ${encodeResult.audioData.length} audio samples`);
     console.log(`Message sent: "${encodeResult.messageSent}"`);
     
-    // Decode audio data (example with proper resampling for FT8)
+    // Decode audio data
     const audioData = new Float32Array(48000 * 13); // 13 seconds at 48kHz
     // ... fill audioData with actual audio samples ...
     
-    const decodeResult = await lib.decode(
-        WSJTXMode.FT8,
-        audioData,
-        1000  // Same audio frequency used for encoding
-    );
+    const decodeResult = await lib.decode(WSJTXMode.FT8, audioData, {
+        frequency: 1000,
+        threads: 4
+    });
     
-    // Get decoded messages
-    const messages = lib.pullMessages();
-    messages.forEach(msg => {
+    decodeResult.messages.forEach(msg => {
         console.log(`Decoded: "${msg.text}" (SNR: ${msg.snr} dB, ΔT: ${msg.deltaTime}s)`);
     });
 }
@@ -173,33 +170,52 @@ Creates a new WSJTX library instance.
 **Parameters:**
 - `config` (optional): Configuration options
   - `maxThreads`: Maximum number of threads (1-16, default: 4)
+  - `encodeSampleRate`: Process-global FT8/FT4/Q65 encode output sample rate (`12000` or `48000`, default: `12000`)
   - `debug`: Enable debug logging (default: false)
 
 #### Methods
 
-##### `decode(mode, audioData, frequency, threads?): Promise<DecodeResult>`
+##### `decode(mode, audioData, options): Promise<DecodeResult>`
 
 Decode digital radio signals from audio data.
 
 **Parameters:**
 - `mode`: WSJTXMode enum value
 - `audioData`: Float32Array or Int16Array of audio samples
-- `frequency`: Audio frequency in Hz (typically 500-3000 Hz)
-- `threads`: Number of threads to use (optional, default: 4)
+- `options`: DecodeOptions object
+  - `frequency`: Audio frequency in Hz (typically 500-3000 Hz)
+  - `txFrequency`: Transmit audio frequency in Hz (optional, defaults to `frequency`)
+  - `threads`: Number of threads to use (optional, default: 4)
+  - `lowFreq`: Lower decode frequency limit in Hz (optional, default: 200)
+  - `highFreq`: Upper decode frequency limit in Hz (optional, default: 4000)
+  - `tolerance`: Frequency tolerance in Hz (optional, default: 20)
+  - `myCall`, `myGrid`, `dxCall`, `dxGrid`: Optional AP decode context
+  - `apDecode`: Enable AP decode passes (optional, default: true)
+  - `decodeDepth`: WSJT-X decoder depth (optional, default: 1)
+  - `qsoProgress`: WSJT-X QSO progress stage (optional, default: 0)
+  - `q65Period`: Q65 period in seconds: `30`, `60`, `120`, or `300` (optional, default: `60`)
+  - `q65Submode`: Q65 submode: `'A'`, `'B'`, `'C'`, `'D'`, `'E'`, or `0`-`4` (optional, default: `'A'`)
+  - `q65MaxDrift`: Q65 max drift control (optional, default: `50`)
+  - `q65ClearAveraging`: Clear Q65 averaging state before decode (optional, default: false)
+  - `q65SingleDecode`: Request Q65 single-candidate decode behavior (optional, default: false)
+  - `q65Averaging`: Enable Q65 averaged decode passes (optional, default: false)
 
-**Returns:** Promise resolving to DecodeResult with success status
+**Returns:** Promise resolving to DecodeResult with success status and decoded messages
 
-**Note:** For optimal FT8 decoding, audio may need resampling. See examples for details.
+**Note:** Use `lib.getSampleRate(mode)` to determine the expected sample rate for a mode. Q65 uses 12 kHz audio by default.
 
-##### `encode(mode, message, frequency, threads?): Promise<EncodeResult>`
+##### `encode(mode, message, frequency, threadsOrOptions?): Promise<EncodeResult>`
 
 Encode a message into audio waveform for transmission.
 
 **Parameters:**
 - `mode`: WSJTXMode enum value
-- `message`: Message text to encode (FT8/FT4 structured messages: 1-37 characters; free text payloads are limited by WSJT-X to 13 characters)
+- `message`: Message text to encode (FT8/FT4/Q65 structured messages: 1-37 characters; free text payloads are limited by WSJT-X to 13 characters)
 - `frequency`: Audio frequency in Hz (typically 500-3000 Hz)
-- `threads`: Number of threads to use (optional, default: 4)
+- `threadsOrOptions`: Either a thread count number or an EncodeOptions object (optional, default: 4)
+  - `threads`: Number of threads to use
+  - `q65Period`: Q65 period in seconds: `30`, `60`, `120`, or `300` (optional, default: `60`)
+  - `q65Submode`: Q65 submode: `'A'`, `'B'`, `'C'`, `'D'`, `'E'`, or `0`-`4` (optional, default: `'A'`)
 
 **Returns:** Promise resolving to EncodeResult with audio data and actual message sent
 
@@ -252,7 +268,8 @@ enum WSJTXMode {
     FST4 = 5,
     Q65 = 6,
     FST4W = 7,
-    WSPR = 8
+    JT65JT9 = 8,
+    WSPR = 9
 }
 ```
 
@@ -264,6 +281,8 @@ interface WSJTXMessage {
     snr: number;            // Signal-to-noise ratio in dB
     deltaTime: number;      // Time offset in seconds
     deltaFrequency: number; // Frequency offset in Hz
+    timestamp: number;      // seconds-of-day reported by the decoder
+    sync: number;           // Sync quality
 }
 ```
 
@@ -271,10 +290,20 @@ interface WSJTXMessage {
 
 ```typescript
 interface EncodeResult {
-    audioData: Float32Array;  // Generated audio waveform (48kHz sample rate)
+    audioData: Float32Array;  // Generated audio waveform
     messageSent: string;      // Actual message encoded
+    sampleRate: number;       // Output sample rate
 }
 ```
+
+#### Q65 Options
+
+```typescript
+type Q65Period = 30 | 60 | 120 | 300;
+type Q65Submode = 'A' | 'B' | 'C' | 'D' | 'E' | 0 | 1 | 2 | 3 | 4;
+```
+
+Q65 options are accepted by both `encode()` and `decode()` so the TX/RX chain can be configured symmetrically.
 
 #### WSPRResult
 
@@ -329,28 +358,71 @@ async function ft8Example() {
     writer.end();
     
     // 3. Read back and decode
-    // Note: For optimal decode, you may need resampling
-    const resampled = resampleTo12kHz(encodeResult.audioData);
-    const audioForDecode = new Int16Array(resampled.length);
-    for (let i = 0; i < resampled.length; i++) {
-        audioForDecode[i] = Math.round(resampled[i] * 32767);
-    }
+    const decodeResult = await lib.decode(WSJTXMode.FT8, encodeResult.audioData, {
+        frequency: audioFrequency,
+        threads: 1
+    });
     
-    lib.pullMessages(); // Clear queue
-    const decodeResult = await lib.decode(WSJTXMode.FT8, audioForDecode, audioFrequency);
-    
-    const messages = lib.pullMessages();
-    console.log(`Decoded ${messages.length} messages`);
+    console.log(`Decoded ${decodeResult.messages.length} messages`);
 }
+```
 
-// Helper function for resampling (48kHz -> 12kHz)
-function resampleTo12kHz(audioData48k: Float32Array): Float32Array {
-    const audioData12k = new Float32Array(Math.floor(audioData48k.length / 4));
-    for (let i = 0; i < audioData12k.length; i++) {
-        audioData12k[i] = audioData48k[i * 4];
-    }
-    return audioData12k;
+### Q65 Encode-Decode Cycle
+
+```typescript
+import { WSJTXLib, WSJTXMode } from 'wsjtx-lib';
+
+async function q65Example() {
+    const lib = new WSJTXLib({ maxThreads: 4 });
+    const message = 'CQ K1ABC FN20';
+    const audioFrequency = 1500;
+
+    // Encode a Q65-30A frame at 12 kHz.
+    const encoded = await lib.encode(WSJTXMode.Q65, message, audioFrequency, {
+        threads: 1,
+        q65Period: 30,
+        q65Submode: 'A'
+    });
+
+    console.log(`Encoded: "${encoded.messageSent.trim()}"`);
+    console.log(`Samples: ${encoded.audioData.length}`);
+    console.log(`Sample rate: ${encoded.sampleRate} Hz`);
+
+    // Decode with matching Q65 period/submode and a wide enough search window.
+    const decoded = await lib.decode(WSJTXMode.Q65, encoded.audioData, {
+        frequency: audioFrequency,
+        txFrequency: audioFrequency,
+        threads: 1,
+        lowFreq: 0,
+        highFreq: 5000,
+        tolerance: 5000,
+        q65Period: 30,
+        q65Submode: 'A',
+        q65MaxDrift: 50,
+        q65ClearAveraging: true
+    });
+
+    decoded.messages.forEach((msg) => {
+        console.log(`Decoded: "${msg.text.trim()}" SNR=${msg.snr} dB DT=${msg.deltaTime}s Freq=${msg.deltaFrequency} Hz`);
+    });
 }
+```
+
+For other Q65 variants, use the same API and change the period/submode pair:
+
+```typescript
+await lib.encode(WSJTXMode.Q65, 'CQ K1ABC FN20', 1500, {
+    q65Period: 120,
+    q65Submode: 'E'
+});
+
+await lib.decode(WSJTXMode.Q65, audioData, {
+    frequency: 1500,
+    q65Period: 120,
+    q65Submode: 'E',
+    q65MaxDrift: 100,
+    q65Averaging: true
+});
 ```
 
 ### WSPR Decoding
@@ -429,7 +501,9 @@ The library throws `WSJTXError` for all operation failures:
 import { WSJTXError } from 'wsjtx-lib';
 
 try {
-    await lib.decode(WSJTXMode.FT8, audioData, 1000);
+    await lib.decode(WSJTXMode.FT8, audioData, {
+        frequency: 1000
+    });
 } catch (error) {
     if (error instanceof WSJTXError) {
         console.error(`WSJTX Error [${error.code}]: ${error.message}`);
@@ -453,11 +527,13 @@ try {
 
 2. **Sample Rates**: Different modes require different sample rates. Use `lib.getSampleRate(mode)` to get the correct rate.
 
-3. **Audio Resampling**: For optimal FT8 decoding, audio may need to be resampled from 48kHz to 12kHz. See examples for implementation.
+3. **Q65 Parameters**: Q65 TX and RX must use the same period/submode pair. Supported periods are `30`, `60`, `120`, and `300`; supported submodes are `A` through `E`.
 
-4. **Thread Safety**: Each WSJTXLib instance should be used from a single thread. Create separate instances for concurrent operations.
+4. **Audio Resampling**: Input audio should match the sample rate expected by the selected mode. Q65 expects 12 kHz audio.
 
-5. **Message Queue**: The `pullMessages()` method clears the internal message queue. Call it regularly to avoid memory buildup.
+5. **Thread Safety**: Each WSJTXLib instance should be used from a single thread. Create separate instances for concurrent operations.
+
+6. **Message Queue**: `decode()` returns decoded messages directly. `pullMessages()` is also available for compatibility with the internal message queue.
 
 ## Building from Source (Advanced)
 

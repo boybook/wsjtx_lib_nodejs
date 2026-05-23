@@ -93,6 +93,17 @@ typedef struct {
     int cycles;
 } wsjtx_decoder_result_t;
 
+/* Encode options for v2 API.
+ * - threads: currently a worker hint kept for API symmetry.
+ * - q65_period: Q65 T/R period in seconds: 30, 60, 120, or 300.
+ * - q65_submode: Q65 submode A-E represented as 0-4.
+ */
+typedef struct {
+    int threads;
+    int q65_period;
+    int q65_submode;
+} wsjtx_encode_options_t;
+
 /* Decode options for v2 API.
  * - frequency: nominal QSO frequency in Hz (passed as nfqso to the decoder)
  * - tx_frequency: transmit audio offset in Hz (passed as nftx to the decoder)
@@ -105,8 +116,13 @@ typedef struct {
  * - hiscall:   DX callsign for AP decode (empty = none)
  * - hisgrid:   DX 4-char grid for AP decode (empty = none)
  * - ap_decode: enable AP decode passes (default 1)
- * - decode_depth: WSJT-X decode depth (default 1)
+ * - decode_depth: WSJT-X decoder depth (default 1)
  * - qso_progress: WSJT-X QSO progress stage (default 0)
+ * - q65_period/q65_submode: Q65 period and submode; ignored by other modes.
+ * - q65_max_drift: Q65 max drift control.
+ * - q65_clear_averaging: clear Q65 averaging state before decode.
+ * - q65_single_decode: request single-candidate Q65 decode behavior.
+ * - q65_averaging: enable averaged Q65 decode passes.
  */
 typedef struct {
     int frequency;
@@ -118,6 +134,12 @@ typedef struct {
     int ap_decode;
     int decode_depth;
     int qso_progress;
+    int q65_period;
+    int q65_submode;
+    int q65_max_drift;
+    int q65_clear_averaging;
+    int q65_single_decode;
+    int q65_averaging;
     char mycall[13];
     char mygrid[7];
     char hiscall[13];
@@ -131,86 +153,41 @@ WSJTX_API void wsjtx_destroy(wsjtx_handle_t handle);
 
 /* ---- Decode ---- */
 
-/**
- * Decode audio samples (float format) — legacy API.
- * Results are placed in the internal message queue; use wsjtx_pull_message() to retrieve.
- * Returns WSJTX_OK on success, negative error code on failure.
- */
 WSJTX_API int wsjtx_decode_float(wsjtx_handle_t handle, int mode,
     float* samples, int num_samples, int freq, int threads);
 
-/**
- * Decode audio samples (int16 format) — legacy API.
- * Results are placed in the internal message queue; use wsjtx_pull_message() to retrieve.
- * Returns WSJTX_OK on success, negative error code on failure.
- */
 WSJTX_API int wsjtx_decode_int16(wsjtx_handle_t handle, int mode,
     int16_t* samples, int num_samples, int freq, int threads);
 
-/**
- * Decode audio samples (float format) with full options — v2 API.
- * Applies dxCall/dxGrid (for A8 list decode) and the decode frequency range
- * before invoking the decoder. Results are placed in the internal queue;
- * use wsjtx_pull_messages() to retrieve them in batch.
- */
 WSJTX_API int wsjtx_decode_float_v2(wsjtx_handle_t handle, int mode,
     const float* samples, int num_samples,
     const wsjtx_decode_options_t* options);
 
-/**
- * Decode audio samples (int16 format) with full options — v2 API.
- */
 WSJTX_API int wsjtx_decode_int16_v2(wsjtx_handle_t handle, int mode,
     const int16_t* samples, int num_samples,
     const wsjtx_decode_options_t* options);
 
 /* ---- Encode ---- */
 
-/**
- * Encode a message into audio samples.
- *
- * @param sample_rate      Output sample rate for FT8/FT4 encode; must be 12000 or 48000
- * @param out_samples      Caller-allocated buffer for output audio samples
- * @param out_num_samples  On return, the number of samples written
- * @param out_buf_size     Size of out_samples buffer (in floats)
- * @param out_message_sent Caller-allocated buffer for the actual message sent
- * @param out_msg_buf_size Size of out_message_sent buffer (in bytes)
- *
- * Returns WSJTX_OK on success, WSJTX_ERR_BUFFER_TOO_SMALL if buffer is insufficient.
- */
 WSJTX_API int wsjtx_encode(wsjtx_handle_t handle, int mode, int freq, int sample_rate,
     const char* message,
     float* out_samples, int* out_num_samples, int out_buf_size,
     char* out_message_sent, int out_msg_buf_size);
 
+WSJTX_API int wsjtx_encode_v2(wsjtx_handle_t handle, int mode, int freq, int sample_rate,
+    const char* message, const wsjtx_encode_options_t* options,
+    float* out_samples, int* out_num_samples, int out_buf_size,
+    char* out_message_sent, int out_msg_buf_size);
+
 /* ---- Message queue ---- */
 
-/**
- * Pull one decoded message from the queue.
- * Returns 1 if a message was retrieved, 0 if the queue is empty.
- */
 WSJTX_API int wsjtx_pull_message(wsjtx_handle_t handle, wsjtx_message_t* out_msg);
 
-/**
- * Pull up to `max_messages` decoded messages from the queue in one call.
- * Returns the number of messages written into `out_messages` (>= 0).
- */
 WSJTX_API int wsjtx_pull_messages(wsjtx_handle_t handle,
     wsjtx_message_t* out_messages, int max_messages);
 
 /* ---- WSPR ---- */
 
-/**
- * Decode WSPR from IQ data.
- *
- * @param iq_interleaved  Interleaved float array [re0, im0, re1, im1, ...]
- * @param num_iq_samples  Number of IQ sample pairs (array length / 2)
- * @param options         Decoder options
- * @param out_results     Caller-allocated array for results
- * @param max_results     Maximum number of results to write
- *
- * Returns the number of results decoded (>= 0), or negative error code.
- */
 WSJTX_API int wsjtx_wspr_decode(wsjtx_handle_t handle,
     float* iq_interleaved, int num_iq_samples,
     wsjtx_decoder_options_t* options,

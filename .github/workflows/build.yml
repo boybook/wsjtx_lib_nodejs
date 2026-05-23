@@ -1,8 +1,9 @@
 name: Build and Package
 
 on:
+  workflow_dispatch:
   push:
-    branches: [main, develop]
+    branches: [main, develop, feature/q65-chain]
     tags: ['v*']
   pull_request:
     branches: [main]
@@ -11,6 +12,72 @@ env:
   NODE_VERSION: '20'
 
 jobs:
+  q65-linux-smoke:
+    name: Q65 Linux smoke build
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install native build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            cmake build-essential gfortran libfftw3-dev libboost-all-dev \
+            pkg-config python3 ca-certificates
+
+      - name: Install Node dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Build native addon and TypeScript
+        run: npm run build
+
+      - name: Run Q65 smoke regression tests
+        run: npm test
+
+      - name: Print Q65 option smoke output
+        run: |
+          node --input-type=module - <<'JS'
+          import { WSJTXLib, WSJTXMode } from './dist/src/index.js';
+          const lib = new WSJTXLib();
+          const cases = [
+            { q65Period: 30, q65Submode: 'B' },
+            { q65Period: 60, q65Submode: 'A' },
+            { q65Period: 120, q65Submode: 'E' },
+          ];
+          for (const q65 of cases) {
+            const encoded = await lib.encode(WSJTXMode.Q65, 'CQ K1ABC FN20', 1500, {
+              threads: 1,
+              ...q65,
+            });
+            console.log(JSON.stringify({
+              mode: 'Q65',
+              ...q65,
+              sampleRate: encoded.sampleRate,
+              samples: encoded.audioData.length,
+              seconds: encoded.audioData.length / encoded.sampleRate,
+              messageSent: encoded.messageSent.trim(),
+            }));
+          }
+          JS
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: q65-linux-smoke-debug
+          path: |
+            build/
+            CMakeFiles/
+            CMakeCache.txt
+          retention-days: 7
+
   build:
     name: Build ${{ matrix.platform }}-${{ matrix.arch }}
     runs-on: ${{ matrix.os }}

@@ -2,11 +2,11 @@
  * wsjtx-lib — Node.js binding for the WSJT-X 3.0.0 backend.
  *
  * Public surface:
- *   - WSJTXLib.encode(mode, message, frequency)
+ *   - WSJTXLib.encode(mode, message, frequency, threadsOrOptions?)
  *   - WSJTXLib.decode(mode, audio, options)
  *   - WSJTXLib.decodeWSPR(audio, options)
  *   - WSJTXLib.convertAudioFormat(audio, target)
- *   - capability/sample-rate query helpers (FT8/FT4 default encode rate: 12 kHz)
+ *   - capability/sample-rate query helpers (FT8/FT4/Q65 default encode rate: 12 kHz)
  */
 
 import {
@@ -21,6 +21,9 @@ import {
   type WSJTXConfig,
   type ModeCapabilities,
   type DecodeOptions,
+  type EncodeOptions,
+  type Q65Period,
+  type Q65Submode,
 } from './types.js';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
@@ -47,11 +50,23 @@ interface NativeDecodeOptions {
   apDecode: boolean;
   decodeDepth: number;
   qsoProgress: number;
+  q65Period: number;
+  q65Submode: number;
+  q65MaxDrift: number;
+  q65ClearAveraging: boolean;
+  q65SingleDecode: boolean;
+  q65Averaging: boolean;
+}
+
+interface NativeEncodeOptions {
+  threads: number;
+  q65Period: number;
+  q65Submode: number;
 }
 
 interface NativeWSJTXLib {
   decode(mode: number, audio: AudioData, opts: NativeDecodeOptions, cb: (e: Error | null, r: DecodeResult) => void): void;
-  encode(mode: number, message: string, frequency: number, threads: number, cb: (e: Error | null, r: EncodeResult) => void): void;
+  encode(mode: number, message: string, frequency: number, opts: NativeEncodeOptions, cb: (e: Error | null, r: EncodeResult) => void): void;
   decodeWSPR(audio: Float32Array, opts: Record<string, unknown>, cb: (e: Error | null, r: WSPRResult[]) => void): void;
   pullMessages(): WSJTXMessage[];
   isEncodingSupported(mode: number): boolean;
@@ -82,6 +97,14 @@ const FREQ_MAX = 30_000_000;
 const THREADS_MIN = 1;
 const THREADS_MAX = 16;
 const MESSAGE_MAX_LEN = 37;
+const Q65_PERIODS = new Set<number>([30, 60, 120, 300]);
+const Q65_SUBMODES = new Map<string, number>([
+  ['A', 0],
+  ['B', 1],
+  ['C', 2],
+  ['D', 3],
+  ['E', 4],
+]);
 
 export class WSJTXLib {
   private readonly native: NativeWSJTXLib;
@@ -97,14 +120,21 @@ export class WSJTXLib {
     this.validateMode(mode);
     this.validateAudio(audioData);
     this.validateFrequency(options.frequency);
+    const threads = options.threads ?? this.config.maxThreads;
+    this.validateThreads(threads);
     if (!this.isDecodingSupported(mode)) {
       throw new WSJTXError('Decoding not supported for this mode', 'UNSUPPORTED');
     }
 
+    const q65Period = this.normalizeQ65Period(options.q65Period ?? 60);
+    const q65Submode = this.normalizeQ65Submode(options.q65Submode ?? 'A');
+    const q65MaxDrift = options.q65MaxDrift ?? 50;
+    this.validateNonNegativeInteger(q65MaxDrift, 'q65MaxDrift');
+
     const opts: NativeDecodeOptions = {
       frequency: options.frequency,
       txFrequency: options.txFrequency ?? options.frequency,
-      threads: options.threads ?? this.config.maxThreads,
+      threads,
       lowFreq: options.lowFreq ?? this.config.defaultLowFreq,
       highFreq: options.highFreq ?? this.config.defaultHighFreq,
       tolerance: options.tolerance ?? this.config.defaultTolerance,
@@ -115,6 +145,12 @@ export class WSJTXLib {
       apDecode: options.apDecode ?? true,
       decodeDepth: options.decodeDepth ?? 1,
       qsoProgress: options.qsoProgress ?? 0,
+      q65Period,
+      q65Submode,
+      q65MaxDrift,
+      q65ClearAveraging: options.q65ClearAveraging ?? false,
+      q65SingleDecode: options.q65SingleDecode ?? false,
+      q65Averaging: options.q65Averaging ?? false,
     };
 
     return new Promise((resolve, reject) => {
@@ -129,18 +165,19 @@ export class WSJTXLib {
     mode: WSJTXMode,
     message: string,
     frequency: number,
-    threads: number = this.config.maxThreads,
+    threadsOrOptions: number | EncodeOptions = this.config.maxThreads,
   ): Promise<EncodeResult> {
     this.validateMode(mode);
     this.validateMessage(message);
     this.validateFrequency(frequency);
-    this.validateThreads(threads);
+    const opts = this.normalizeEncodeOptions(threadsOrOptions);
+    this.validateThreads(opts.threads);
     if (!this.isEncodingSupported(mode)) {
       throw new WSJTXError('Encoding not supported for this mode', 'UNSUPPORTED');
     }
 
     return new Promise((resolve, reject) => {
-      this.native.encode(mode, message, frequency, threads, (err, result) => {
+      this.native.encode(mode, message, frequency, opts, (err, result) => {
         if (err) reject(new WSJTXError(err.message, 'ENCODE_ERROR'));
         else resolve(result);
       });
@@ -211,6 +248,16 @@ export class WSJTXLib {
     });
   }
 
+  private normalizeEncodeOptions(threadsOrOptions: number | EncodeOptions): NativeEncodeOptions {
+    const options = typeof threadsOrOptions === 'number' ? { threads: threadsOrOptions } : threadsOrOptions;
+    const threads = options.threads ?? this.config.maxThreads;
+    return {
+      threads,
+      q65Period: this.normalizeQ65Period(options.q65Period ?? 60),
+      q65Submode: this.normalizeQ65Submode(options.q65Submode ?? 'A'),
+    };
+  }
+
   private validateMode(mode: WSJTXMode): void {
     if (!Object.values(WSJTXMode).includes(mode)) {
       throw new WSJTXError('Invalid mode', 'INVALID');
@@ -247,12 +294,42 @@ export class WSJTXLib {
       throw new WSJTXError('audioData must be a non-empty Float32Array or Int16Array', 'INVALID');
     }
   }
+
+  private normalizeQ65Period(period: number): number {
+    if (!Number.isInteger(period) || !Q65_PERIODS.has(period)) {
+      throw new WSJTXError('q65Period must be one of 30, 60, 120, or 300', 'INVALID');
+    }
+    return period;
+  }
+
+  private normalizeQ65Submode(submode: Q65Submode): number {
+    if (typeof submode === 'number') {
+      if (!Number.isInteger(submode) || submode < 0 || submode > 4) {
+        throw new WSJTXError('q65Submode must be A-E or 0..4', 'INVALID');
+      }
+      return submode;
+    }
+    const normalized = Q65_SUBMODES.get(submode.toUpperCase());
+    if (normalized === undefined) {
+      throw new WSJTXError('q65Submode must be A-E or 0..4', 'INVALID');
+    }
+    return normalized;
+  }
+
+  private validateNonNegativeInteger(value: number, name: string): void {
+    if (!Number.isInteger(value) || value < 0) {
+      throw new WSJTXError(`${name} must be a non-negative integer`, 'INVALID');
+    }
+  }
 }
 
 export { WSJTXMode, WSJTXError };
 export type {
   DecodeResult,
   EncodeResult,
+  EncodeOptions,
+  Q65Period,
+  Q65Submode,
   WSPRResult,
   WSPRDecodeOptions,
   WSJTXMessage,

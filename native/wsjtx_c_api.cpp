@@ -13,7 +13,6 @@
 #include <complex>
 #include <string>
 
-/* Mode metadata table (mirrors wsjtx_wrapper.cpp MODE_INFO) */
 struct ModeMetadata {
     int sampleRate;
     double duration;
@@ -28,7 +27,7 @@ static const ModeMetadata MODE_TABLE[] = {
     /* JT65    */ { 11025, 46.8,  0, 1 },
     /* JT9     */ { 12000, 49.0,  0, 1 },
     /* FST4    */ { 12000, 60.0,  0, 1 },
-    /* Q65     */ { 12000, 60.0,  0, 1 },
+    /* Q65     */ { 12000, 60.0,  1, 1 },
     /* FST4W   */ { 12000, 120.0, 0, 1 },
     /* JT65JT9 */ { 11025, 46.8,  0, 1 },
     /* WSPR    */ { 12000, 110.6, 0, 1 },
@@ -40,13 +39,30 @@ static inline int valid_mode(int mode) {
     return mode >= 0 && mode < MODE_COUNT;
 }
 
+static inline int valid_q65_period(int period) {
+    return period == 30 || period == 60 || period == 120 || period == 300;
+}
+
+static inline int normalize_q65_period(int period) {
+    return valid_q65_period(period) ? period : 60;
+}
+
+static inline int normalize_q65_submode(int submode) {
+    return (submode >= 0 && submode <= 4) ? submode : 0;
+}
+
 static inline wsjtx_lib* to_lib(wsjtx_handle_t h) {
     return static_cast<wsjtx_lib*>(h);
 }
 
-/* Apply v2 decode options onto the lib instance.
- * Station fields are always applied so consecutive decodes do not reuse
- * stale AP context from a previous request. */
+static wsjtx_encode_options_t default_encode_options(void) {
+    wsjtx_encode_options_t opts;
+    opts.threads = 1;
+    opts.q65_period = 60;
+    opts.q65_submode = 0;
+    return opts;
+}
+
 static void apply_decode_options(wsjtx_lib* lib, const wsjtx_decode_options_t* opts) {
     lib->setDecodeStationInfo(
         std::string(opts->mycall),
@@ -59,6 +75,13 @@ static void apply_decode_options(wsjtx_lib* lib, const wsjtx_decode_options_t* o
         opts->decode_depth,
         opts->tx_frequency,
         opts->qso_progress);
+    lib->setDecodeQ65Controls(
+        normalize_q65_period(opts->q65_period),
+        normalize_q65_submode(opts->q65_submode),
+        opts->q65_max_drift < 0 ? 50 : opts->q65_max_drift,
+        opts->q65_clear_averaging != 0,
+        opts->q65_single_decode != 0,
+        opts->q65_averaging != 0);
 }
 
 /* ---- Lifecycle ---- */
@@ -152,14 +175,33 @@ WSJTX_API int wsjtx_encode(wsjtx_handle_t handle, int mode, int freq, int sample
     float* out_samples, int* out_num_samples, int out_buf_size,
     char* out_message_sent, int out_msg_buf_size)
 {
+    wsjtx_encode_options_t opts = default_encode_options();
+    return wsjtx_encode_v2(handle, mode, freq, sample_rate, message, &opts,
+        out_samples, out_num_samples, out_buf_size,
+        out_message_sent, out_msg_buf_size);
+}
+
+WSJTX_API int wsjtx_encode_v2(wsjtx_handle_t handle, int mode, int freq, int sample_rate,
+    const char* message, const wsjtx_encode_options_t* options,
+    float* out_samples, int* out_num_samples, int out_buf_size,
+    char* out_message_sent, int out_msg_buf_size)
+{
     if (!handle) return WSJTX_ERR_INVALID_HANDLE;
     if (!valid_mode(mode)) return WSJTX_ERR_INVALID_MODE;
     if (sample_rate != 12000 && sample_rate != 48000) return WSJTX_ERR_INVALID_SAMPLE_RATE;
 
     try {
+        wsjtx_encode_options_t defaults = default_encode_options();
+        const wsjtx_encode_options_t* opts = options ? options : &defaults;
         std::string messageSent;
         std::vector<float> audio = to_lib(handle)->encode(
-            static_cast<wsjtxMode>(mode), freq, std::string(message), messageSent, sample_rate);
+            static_cast<wsjtxMode>(mode),
+            freq,
+            std::string(message),
+            messageSent,
+            sample_rate,
+            normalize_q65_period(opts->q65_period),
+            normalize_q65_submode(opts->q65_submode));
 
         if (audio.empty()) return WSJTX_ERR_ENCODE_FAILED;
 
@@ -236,14 +278,12 @@ WSJTX_API int wsjtx_wspr_decode(wsjtx_handle_t handle,
     if (!handle) return WSJTX_ERR_INVALID_HANDLE;
 
     try {
-        /* Reconstruct complex vector from interleaved floats */
         std::vector<std::complex<float>> iqData;
         iqData.reserve(num_iq_samples);
         for (int i = 0; i < num_iq_samples; i++) {
             iqData.emplace_back(iq_interleaved[i * 2], iq_interleaved[i * 2 + 1]);
         }
 
-        /* Convert C options to C++ decoder_options */
         decoder_options opts;
         opts.freq         = options->freq;
         opts.quickmode    = options->quickmode;

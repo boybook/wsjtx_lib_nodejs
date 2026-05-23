@@ -10,9 +10,17 @@ namespace wsjtx_nodejs
 {
     namespace {
         int g_encodeSampleRate = 0;
-    }
 
-    // ---- WSJTXLibWrapper ----
+        int getOptionalInt(const Napi::Object& obj, const char* key, int fallback)
+        {
+            return obj.Has(key) ? obj.Get(key).As<Napi::Number>().Int32Value() : fallback;
+        }
+
+        int getOptionalBoolAsInt(const Napi::Object& obj, const char* key, int fallback)
+        {
+            return obj.Has(key) ? (obj.Get(key).As<Napi::Boolean>().Value() ? 1 : 0) : fallback;
+        }
+    }
 
     Napi::Object WSJTXLibWrapper::Init(Napi::Env env, Napi::Object exports)
     {
@@ -70,13 +78,12 @@ namespace wsjtx_nodejs
         }
     }
 
-    // ---- Decode ----
-
     Napi::Value WSJTXLibWrapper::Decode(const Napi::CallbackInfo &info)
     {
         Napi::Env env = info.Env();
 
-        if (info.Length() < 4) {
+        if (info.Length() < 4 || !info[0].IsNumber() || !info[1].IsTypedArray() ||
+            !info[2].IsObject() || !info[3].IsFunction()) {
             Napi::TypeError::New(env, "Expected: mode, audioData, options, callback").ThrowAsJavaScriptException();
             return env.Null();
         }
@@ -86,14 +93,20 @@ namespace wsjtx_nodejs
 
         wsjtx_decode_options_t opts = {};
         opts.frequency = optObj.Get("frequency").As<Napi::Number>().Int32Value();
-        opts.tx_frequency = optObj.Has("txFrequency") ? optObj.Get("txFrequency").As<Napi::Number>().Int32Value() : opts.frequency;
-        opts.threads   = optObj.Has("threads") ? optObj.Get("threads").As<Napi::Number>().Int32Value() : 4;
-        opts.low_freq  = optObj.Has("lowFreq") ? optObj.Get("lowFreq").As<Napi::Number>().Int32Value() : 200;
-        opts.high_freq = optObj.Has("highFreq") ? optObj.Get("highFreq").As<Napi::Number>().Int32Value() : 4000;
-        opts.tolerance = optObj.Has("tolerance") ? optObj.Get("tolerance").As<Napi::Number>().Int32Value() : 20;
-        opts.ap_decode = optObj.Has("apDecode") ? (optObj.Get("apDecode").As<Napi::Boolean>().Value() ? 1 : 0) : 1;
-        opts.decode_depth = optObj.Has("decodeDepth") ? optObj.Get("decodeDepth").As<Napi::Number>().Int32Value() : 1;
-        opts.qso_progress = optObj.Has("qsoProgress") ? optObj.Get("qsoProgress").As<Napi::Number>().Int32Value() : 0;
+        opts.tx_frequency = getOptionalInt(optObj, "txFrequency", opts.frequency);
+        opts.threads = getOptionalInt(optObj, "threads", 4);
+        opts.low_freq = getOptionalInt(optObj, "lowFreq", 200);
+        opts.high_freq = getOptionalInt(optObj, "highFreq", 4000);
+        opts.tolerance = getOptionalInt(optObj, "tolerance", 20);
+        opts.ap_decode = getOptionalBoolAsInt(optObj, "apDecode", 1);
+        opts.decode_depth = getOptionalInt(optObj, "decodeDepth", 1);
+        opts.qso_progress = getOptionalInt(optObj, "qsoProgress", 0);
+        opts.q65_period = getOptionalInt(optObj, "q65Period", 60);
+        opts.q65_submode = getOptionalInt(optObj, "q65Submode", 0);
+        opts.q65_max_drift = getOptionalInt(optObj, "q65MaxDrift", 50);
+        opts.q65_clear_averaging = getOptionalBoolAsInt(optObj, "q65ClearAveraging", 0);
+        opts.q65_single_decode = getOptionalBoolAsInt(optObj, "q65SingleDecode", 0);
+        opts.q65_averaging = getOptionalBoolAsInt(optObj, "q65Averaging", 0);
         if (optObj.Has("myCall")) { auto s = optObj.Get("myCall").As<Napi::String>().Utf8Value(); strncpy(opts.mycall, s.c_str(), 12); }
         if (optObj.Has("myGrid")) { auto s = optObj.Get("myGrid").As<Napi::String>().Utf8Value(); strncpy(opts.mygrid, s.c_str(), 6); }
         if (optObj.Has("dxCall")) { auto s = optObj.Get("dxCall").As<Napi::String>().Utf8Value(); strncpy(opts.hiscall, s.c_str(), 12); }
@@ -113,22 +126,17 @@ namespace wsjtx_nodejs
         return env.Undefined();
     }
 
-    // ---- Encode ----
-
     Napi::Value WSJTXLibWrapper::Encode(const Napi::CallbackInfo &info)
     {
         Napi::Env env = info.Env();
 
-        if (info.Length() < 5)
-        {
-            Napi::TypeError::New(env, "Expected 5 arguments: mode, message, frequency, threads, callback")
+        if (info.Length() < 5) {
+            Napi::TypeError::New(env, "Expected 5 arguments: mode, message, frequency, options, callback")
                 .ThrowAsJavaScriptException();
             return env.Null();
         }
 
-        if (!info[0].IsNumber() || !info[1].IsString() || !info[2].IsNumber() ||
-            !info[3].IsNumber() || !info[4].IsFunction())
-        {
+        if (!info[0].IsNumber() || !info[1].IsString() || !info[2].IsNumber() || !info[4].IsFunction()) {
             Napi::TypeError::New(env, "Invalid argument types").ThrowAsJavaScriptException();
             return env.Null();
         }
@@ -136,13 +144,28 @@ namespace wsjtx_nodejs
         int mode = info[0].As<Napi::Number>().Int32Value();
         std::string message = info[1].As<Napi::String>().Utf8Value();
         int frequency = info[2].As<Napi::Number>().Int32Value();
-        int threads = info[3].As<Napi::Number>().Int32Value();
         Napi::Function callback = info[4].As<Napi::Function>();
+
+        wsjtx_encode_options_t options = {};
+        options.threads = 4;
+        options.q65_period = 60;
+        options.q65_submode = 0;
+        if (info[3].IsNumber()) {
+            options.threads = info[3].As<Napi::Number>().Int32Value();
+        } else if (info[3].IsObject()) {
+            Napi::Object optObj = info[3].As<Napi::Object>();
+            options.threads = getOptionalInt(optObj, "threads", 4);
+            options.q65_period = getOptionalInt(optObj, "q65Period", 60);
+            options.q65_submode = getOptionalInt(optObj, "q65Submode", 0);
+        } else {
+            Napi::TypeError::New(env, "Encode options must be a thread count or an object").ThrowAsJavaScriptException();
+            return env.Null();
+        }
 
         try {
             ValidateMode(env, mode);
             ValidateFrequency(env, frequency);
-            ValidateThreads(env, threads);
+            ValidateThreads(env, options.threads);
             ValidateMessage(env, mode, message);
         } catch (const std::exception &e) {
             Napi::Error::New(env, e.what()).ThrowAsJavaScriptException();
@@ -155,102 +178,73 @@ namespace wsjtx_nodejs
             return env.Null();
         }
 
-        auto worker = new EncodeWorker(callback, handle_, mode, message, frequency, threads, encodeSampleRate_);
+        auto worker = new EncodeWorker(callback, handle_, mode, message, frequency, options, encodeSampleRate_);
         worker->Queue();
 
         return env.Undefined();
     }
 
-    // ---- WSPR Decode ----
-
     Napi::Value WSJTXLibWrapper::DecodeWSPR(const Napi::CallbackInfo &info)
     {
         Napi::Env env = info.Env();
 
-        if (info.Length() < 3)
-        {
+        if (info.Length() < 3 || !info[0].IsTypedArray() || !info[1].IsObject() || !info[2].IsFunction()) {
             Napi::TypeError::New(env, "Expected 3 arguments: iqData, options, callback")
                 .ThrowAsJavaScriptException();
             return env.Null();
         }
 
-        if (!info[0].IsTypedArray() || !info[1].IsObject() || !info[2].IsFunction())
-        {
-            Napi::TypeError::New(env, "Invalid argument types").ThrowAsJavaScriptException();
-            return env.Null();
-        }
-
         Napi::Float32Array iqArray = info[0].As<Napi::Float32Array>();
         size_t length = iqArray.ElementLength();
-
-        if (length % 2 != 0)
-        {
+        if (length % 2 != 0) {
             Napi::Error::New(env, "IQ data length must be even (interleaved I,Q samples)")
                 .ThrowAsJavaScriptException();
             return env.Null();
         }
 
-        // Copy the interleaved IQ data directly (no complex conversion needed)
         float *data = iqArray.Data();
         std::vector<float> iqInterleaved(data, data + length);
 
-        // Parse decoder options
         Napi::Object optObj = info[1].As<Napi::Object>();
         wsjtx_decoder_options_t options;
         memset(&options, 0, sizeof(options));
 
         if (optObj.Has("dialFrequency"))
             options.freq = optObj.Get("dialFrequency").As<Napi::Number>().Int32Value();
-
         if (optObj.Has("callsign")) {
             std::string cs = optObj.Get("callsign").As<Napi::String>().Utf8Value();
             strncpy(options.rcall, cs.c_str(), sizeof(options.rcall) - 1);
         }
-
         if (optObj.Has("locator")) {
             std::string loc = optObj.Get("locator").As<Napi::String>().Utf8Value();
             strncpy(options.rloc, loc.c_str(), sizeof(options.rloc) - 1);
         }
-
         if (optObj.Has("quickMode"))
             options.quickmode = optObj.Get("quickMode").As<Napi::Boolean>().Value() ? 1 : 0;
-
         if (optObj.Has("useHashTable"))
             options.usehashtable = optObj.Get("useHashTable").As<Napi::Boolean>().Value() ? 1 : 0;
-
         if (optObj.Has("passes"))
             options.npasses = optObj.Get("passes").As<Napi::Number>().Int32Value();
-
         if (optObj.Has("subtraction"))
             options.subtraction = optObj.Get("subtraction").As<Napi::Boolean>().Value() ? 1 : 0;
 
         Napi::Function callback = info[2].As<Napi::Function>();
-
         auto worker = new WSPRDecodeWorker(callback, handle_, iqInterleaved, options);
         worker->Queue();
-
         return env.Undefined();
     }
-
-    // ---- Pull Messages ----
 
     Napi::Value WSJTXLibWrapper::PullMessages(const Napi::CallbackInfo &info)
     {
         Napi::Env env = info.Env();
-
         Napi::Array results = Napi::Array::New(env);
         wsjtx_message_t msg;
         uint32_t count = 0;
-
-        while (wsjtx_pull_message(handle_, &msg) == 1)
-        {
+        while (wsjtx_pull_message(handle_, &msg) == 1) {
             results[count++] = CreateMessageObject(env, msg);
         }
-
         return results;
     }
-
-    // ---- Query methods ----
 
     Napi::Value WSJTXLibWrapper::IsEncodingSupported(const Napi::CallbackInfo &info)
     {
@@ -282,7 +276,7 @@ namespace wsjtx_nodejs
             return env.Null();
         }
         int mode = info[0].As<Napi::Number>().Int32Value();
-        if (mode == 0 || mode == 1) {
+        if (mode == WSJTX_MODE_FT8 || mode == WSJTX_MODE_FT4 || mode == WSJTX_MODE_Q65) {
             return Napi::Number::New(env, encodeSampleRate_);
         }
         return Napi::Number::New(env, wsjtx_get_sample_rate(mode));
@@ -299,20 +293,12 @@ namespace wsjtx_nodejs
         return Napi::Number::New(env, wsjtx_get_transmission_duration(mode));
     }
 
-    // ---- Audio Format Conversion ----
-
     Napi::Value WSJTXLibWrapper::ConvertAudioFormat(const Napi::CallbackInfo& info)
     {
         Napi::Env env = info.Env();
-
-        if (info.Length() < 3) {
+        if (info.Length() < 3 || !info[0].IsTypedArray() || !info[1].IsString() || !info[2].IsFunction()) {
             Napi::TypeError::New(env, "Expected 3 arguments: audioData, targetFormat, callback")
                 .ThrowAsJavaScriptException();
-            return env.Null();
-        }
-
-        if (!info[0].IsTypedArray() || !info[1].IsString() || !info[2].IsFunction()) {
-            Napi::TypeError::New(env, "Invalid argument types").ThrowAsJavaScriptException();
             return env.Null();
         }
 
@@ -328,7 +314,6 @@ namespace wsjtx_nodejs
 
         Napi::Function callback = info[2].As<Napi::Function>();
         Napi::TypedArray ta = info[0].As<Napi::TypedArray>();
-
         if (ta.TypedArrayType() == napi_float32_array) {
             auto input = ConvertToFloatArray(env, info[0]);
             auto* worker = new AudioConvertWorker(callback, input, tgt);
@@ -342,11 +327,8 @@ namespace wsjtx_nodejs
                 .ThrowAsJavaScriptException();
             return env.Null();
         }
-
         return env.Undefined();
     }
-
-    // ---- Helpers ----
 
     void WSJTXLibWrapper::ValidateMode(Napi::Env env, int mode) {
         if (mode < 0 || mode > WSJTX_MODE_WSPR)
@@ -364,11 +346,8 @@ namespace wsjtx_nodejs
     }
 
     void WSJTXLibWrapper::ValidateMessage(Napi::Env env, int mode, const std::string &message) {
-        if (message.empty()) {
-            throw std::invalid_argument("Message must not be empty");
-        }
-
-        const size_t maxLength = (mode == WSJTX_MODE_FT8 || mode == WSJTX_MODE_FT4) ? 37 : 22;
+        if (message.empty()) throw std::invalid_argument("Message must not be empty");
+        const size_t maxLength = (mode == WSJTX_MODE_FT8 || mode == WSJTX_MODE_FT4 || mode == WSJTX_MODE_Q65) ? 37 : 22;
         if (message.length() > maxLength) {
             throw std::invalid_argument("Message must be 1-" + std::to_string(maxLength) + " characters long");
         }
@@ -398,19 +377,15 @@ namespace wsjtx_nodejs
         return result;
     }
 
-    // ---- Async Workers ----
-
     AsyncWorkerBase::AsyncWorkerBase(Napi::Function &callback, wsjtx_handle_t handle)
         : Napi::AsyncWorker(callback), handle_(handle) {}
 
-    // DecodeWorker (float)
     DecodeWorker::DecodeWorker(Napi::Function &cb, wsjtx_handle_t h,
                                int mode, const std::vector<float> &d,
                                const wsjtx_decode_options_t& o)
         : AsyncWorkerBase(cb, h), mode_(mode), floatData_(d),
           options_(o), useFloat_(true) {}
 
-    // DecodeWorker (int16)
     DecodeWorker::DecodeWorker(Napi::Function &cb, wsjtx_handle_t h,
                                int mode, const std::vector<short int> &d,
                                const wsjtx_decode_options_t& o)
@@ -458,24 +433,23 @@ namespace wsjtx_nodejs
         Callback().Call({env.Null(), result});
     }
 
-    // EncodeWorker
     EncodeWorker::EncodeWorker(Napi::Function &callback, wsjtx_handle_t handle,
                                int mode, const std::string &message,
-                               int frequency, int threads, int sampleRate)
+                               int frequency, const wsjtx_encode_options_t& options,
+                               int sampleRate)
         : AsyncWorkerBase(callback, handle), mode_(mode), message_(message),
-          frequency_(frequency), threads_(threads), sampleRate_(sampleRate) {}
+          frequency_(frequency), options_(options), sampleRate_(sampleRate) {}
 
     void EncodeWorker::Execute()
     {
-        // FT8 at 48kHz for 12.64s = ~607,000 samples; 1M buffer is plenty.
-        static const int MAX_SAMPLES = 1024 * 1024;
+        static const int MAX_SAMPLES = 16 * 1024 * 1024;
         audioData_.resize(MAX_SAMPLES);
         int numSamples = 0;
         char msgSent[256] = {0};
 
-        int rc = wsjtx_encode(handle_, mode_, frequency_,
+        int rc = wsjtx_encode_v2(handle_, mode_, frequency_,
             sampleRate_,
-            message_.c_str(),
+            message_.c_str(), &options_,
             audioData_.data(), &numSamples, MAX_SAMPLES,
             msgSent, sizeof(msgSent));
 
@@ -491,7 +465,6 @@ namespace wsjtx_nodejs
     void EncodeWorker::OnOK()
     {
         Napi::Env env = Env();
-
         Napi::Float32Array audioArray = Napi::Float32Array::New(env, audioData_.size());
         std::copy(audioData_.begin(), audioData_.end(), audioArray.Data());
 
@@ -499,11 +472,9 @@ namespace wsjtx_nodejs
         result.Set("audioData", audioArray);
         result.Set("messageSent", Napi::String::New(env, messageSent_));
         result.Set("sampleRate", Napi::Number::New(env, sampleRate_));
-
         Callback().Call({env.Null(), result});
     }
 
-    // WSPRDecodeWorker
     WSPRDecodeWorker::WSPRDecodeWorker(Napi::Function &callback, wsjtx_handle_t handle,
                                        const std::vector<float> &iqInterleaved,
                                        const wsjtx_decoder_options_t &options)
@@ -513,18 +484,14 @@ namespace wsjtx_nodejs
     {
         static const int MAX_RESULTS = 256;
         results_.resize(MAX_RESULTS);
-
         int numIqSamples = static_cast<int>(iqInterleaved_.size() / 2);
-        int count = wsjtx_wspr_decode(handle_,
-            iqInterleaved_.data(), numIqSamples,
+        int count = wsjtx_wspr_decode(handle_, iqInterleaved_.data(), numIqSamples,
             &options_, results_.data(), MAX_RESULTS);
-
         if (count < 0) {
             SetError("WSPR decode failed with error code " + std::to_string(count));
             results_.clear();
             return;
         }
-
         results_.resize(count);
     }
 
@@ -532,12 +499,9 @@ namespace wsjtx_nodejs
     {
         Napi::Env env = Env();
         Napi::Array resultsArray = Napi::Array::New(env, results_.size());
-
-        for (size_t i = 0; i < results_.size(); i++)
-        {
+        for (size_t i = 0; i < results_.size(); i++) {
             const auto &r = results_[i];
             Napi::Object obj = Napi::Object::New(env);
-
             obj.Set("frequency", Napi::Number::New(env, r.freq));
             obj.Set("sync", Napi::Number::New(env, r.sync));
             obj.Set("snr", Napi::Number::New(env, r.snr));
@@ -549,14 +513,11 @@ namespace wsjtx_nodejs
             obj.Set("locator", Napi::String::New(env, r.loc));
             obj.Set("power", Napi::String::New(env, r.pwr));
             obj.Set("cycles", Napi::Number::New(env, r.cycles));
-
             resultsArray[i] = obj;
         }
-
         Callback().Call({env.Null(), resultsArray});
     }
 
-    // AudioConvertWorker
     void AudioConvertWorker::Execute()
     {
         if (fromFloat_) {
@@ -597,7 +558,6 @@ namespace wsjtx_nodejs
         }
     }
 
-    // Module initialization
     Napi::Object Init(Napi::Env env, Napi::Object exports)
     {
         return WSJTXLibWrapper::Init(env, exports);

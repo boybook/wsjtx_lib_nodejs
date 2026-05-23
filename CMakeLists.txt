@@ -8,6 +8,7 @@ cmake_minimum_required(VERSION 3.15)
 # ============================================================================
 option(WSJTX_BUILD_CORE_ONLY "Build only wsjtx_core shared library" OFF)
 option(WSJTX_BUILD_NODE_ONLY "Build only .node module (requires pre-built wsjtx_core)" OFF)
+option(WSJTX_ENABLE_Q65_CHAIN "Apply local Q65 TX/RX overlay to wsjtx_lib" ON)
 
 # Disable vcpkg manifest mode if detected
 if(DEFINED CMAKE_TOOLCHAIN_FILE AND CMAKE_TOOLCHAIN_FILE MATCHES "vcpkg")
@@ -255,7 +256,11 @@ include_directories(
 # Dependencies for the core library
 set(LIBRARIES_FROM_REFERENCES ${FFTW3F_LIBRARIES} ${FFTW_THREADS_LIBRARIES})
 
-# Build the Fortran/C++ core
+# Build the Fortran/C++ core.  Apply the Q65 source overlay before the
+# submodule is configured so the generated wsjtx_lib target includes Q65 TX/RX.
+if(WSJTX_ENABLE_Q65_CHAIN)
+    include("${CMAKE_SOURCE_DIR}/cmake/patch-wsjtx-q65.cmake")
+endif()
 add_subdirectory(wsjtx_lib)
 link_directories(${FFTW3F_LIBRARY_DIRS})
 

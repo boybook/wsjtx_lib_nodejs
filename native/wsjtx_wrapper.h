@@ -42,9 +42,6 @@ private:
     int encodeSampleRate_ = 12000;
 };
 
-/**
- * Base class for async workers that need the library handle
- */
 class AsyncWorkerBase : public Napi::AsyncWorker {
 public:
     AsyncWorkerBase(Napi::Function& callback, wsjtx_handle_t handle);
@@ -54,9 +51,6 @@ protected:
     wsjtx_handle_t handle_;
 };
 
-/**
- * Async worker for decode operations
- */
 class DecodeWorker : public AsyncWorkerBase {
 public:
     DecodeWorker(Napi::Function& cb, wsjtx_handle_t h, int mode, const std::vector<float>& d, const wsjtx_decode_options_t& o);
@@ -69,14 +63,12 @@ private:
     wsjtx_decode_options_t options_; std::vector<wsjtx_message_t> messages_; int numMessages_ = 0;
 };
 
-/**
- * Async worker for encode operations
- */
 class EncodeWorker : public AsyncWorkerBase {
 public:
     EncodeWorker(Napi::Function& callback, wsjtx_handle_t handle,
                  int mode, const std::string& message,
-                 int frequency, int threads, int sampleRate);
+                 int frequency, const wsjtx_encode_options_t& options,
+                 int sampleRate);
 
 protected:
     void Execute() override;
@@ -86,15 +78,12 @@ private:
     int mode_;
     std::string message_;
     int frequency_;
-    int threads_;
+    wsjtx_encode_options_t options_;
     int sampleRate_;
     std::vector<float> audioData_;
     std::string messageSent_;
 };
 
-/**
- * Async worker for WSPR decode operations
- */
 class WSPRDecodeWorker : public AsyncWorkerBase {
 public:
     WSPRDecodeWorker(Napi::Function& callback, wsjtx_handle_t handle,
@@ -111,9 +100,6 @@ private:
     std::vector<wsjtx_decoder_result_t> results_;
 };
 
-/**
- * Async worker for audio format conversion (no library handle needed)
- */
 class AudioConvertWorker : public Napi::AsyncWorker {
 public:
     enum class Target { Float32, Int16 };

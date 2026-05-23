@@ -17,6 +17,9 @@ export enum WSJTXMode {
 
 export type AudioData = Float32Array | Int16Array;
 
+export type Q65Period = 30 | 60 | 120 | 300;
+export type Q65Submode = 'A' | 'B' | 'C' | 'D' | 'E' | 0 | 1 | 2 | 3 | 4;
+
 export interface WSJTXTime {
   hour: number;
   minute: number;
@@ -33,6 +36,18 @@ export interface WSJTXMessage {
   sync: number;
 }
 
+export interface Q65EncodeOptions {
+  /** Q65 transmit/receive period in seconds. Defaults to 60. */
+  q65Period?: Q65Period;
+  /** Q65 submode A-E, or 0-4. Defaults to A / 0. */
+  q65Submode?: Q65Submode;
+}
+
+export interface EncodeOptions extends Q65EncodeOptions {
+  /** Worker thread hint. Defaults to WSJTXConfig.maxThreads. */
+  threads?: number;
+}
+
 /**
  * Options accepted by `WSJTXLib.decode`.
  *
@@ -46,8 +61,14 @@ export interface WSJTXMessage {
  * - apDecode: enables FT8/FT4 AP decode passes. Defaults to true.
  * - decodeDepth: WSJT-X decoder depth. Defaults to 1.
  * - qsoProgress: WSJT-X QSO progress stage. Defaults to 0.
+ * - q65Period / q65Submode: Q65-specific period and submode, also accepted
+ *   by encode options so Q65 TX/RX can be configured symmetrically.
+ * - q65MaxDrift: Q65 max drift control forwarded to the WSJT-X decoder.
+ * - q65ClearAveraging: clear Q65 averaged-message state before decode.
+ * - q65SingleDecode: request Q65 single-candidate decode behavior.
+ * - q65Averaging: enable Q65 averaged decode passes.
  */
-export interface DecodeOptions {
+export interface DecodeOptions extends Q65EncodeOptions {
   frequency: number;
   txFrequency?: number;
   threads?: number;
@@ -61,6 +82,10 @@ export interface DecodeOptions {
   apDecode?: boolean;
   decodeDepth?: number;
   qsoProgress?: number;
+  q65MaxDrift?: number;
+  q65ClearAveraging?: boolean;
+  q65SingleDecode?: boolean;
+  q65Averaging?: boolean;
 }
 
 export interface DecodeResult {
@@ -109,7 +134,7 @@ export class WSJTXError extends Error {
 export interface WSJTXConfig {
   /** Maximum threads used per decode call. Default 4. */
   maxThreads?: number;
-  /** Process-global FT8/FT4 encode output sample rate. Default 12000. */
+  /** Process-global FT8/FT4/Q65 encode output sample rate. Default 12000. */
   encodeSampleRate?: 12000 | 48000;
   /** Reserved for future use; currently has no runtime effect. */
   debug?: boolean;
