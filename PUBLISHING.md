@@ -17,13 +17,20 @@ git push && git push --tags
 1. 5 平台构建 + 测试（linux-x64, linux-arm64, darwin-arm64, darwin-x64, win32-x64）
 2. 汇总 prebuilds
 3. 验证全部平台二进制完整
-4. `npm publish` 发布到 npm registry
+4. `npm publish` 通过 GitHub OIDC 发布到 npm registry
 5. 创建 GitHub Release 并上传各平台预构建压缩包
 
-## 前置条件
+## npm Trusted Publisher 配置
 
-在 GitHub repo settings → Secrets and variables → Actions 中添加：
-- `NPM_TOKEN`：npm access token（`npm token create` 生成）
+在 npm 包设置的 **Trusted Publisher** 中添加 GitHub Actions 发布者：
+
+- Organization or user: `boybook`
+- Repository: `wsjtx_lib_nodejs`
+- Workflow filename: `build.yml`
+- Environment name: 按实际 GitHub Environment 配置填写；未使用则留空
+
+发布任务使用 GitHub OIDC 短期凭证，不再读取 npm 发布密钥。
+Trusted Publishing 要求 Node.js `22.14.0+` 和 npm `11.5.1+`；发布任务固定使用 Node.js 24。
 
 ## 预构建包结构
 

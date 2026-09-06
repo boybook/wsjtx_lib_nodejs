@@ -29,7 +29,7 @@
     "build:ts": "tsc",
     "clean": "cmake-js clean && rimraf dist",
     "test": "node --test dist/test/wsjtx.basic.test.js",
-    "test:full": "node --test dist/test/wsjtx.test.js",
+    "test:full": "node --test --test-concurrency=1 dist/test/wsjtx.test.js",
     "test:native-hash": "cmake -S . -B build -DWSJTX_BUILD_TESTS=ON && cmake --build build --config Release --target test_packjt77_hash_vectors && ctest --test-dir build --output-on-failure -R '^packjt77_hash_vectors$'",
     "prepare": "npm run build:ts",
     "package": "node scripts/package-prebuilds.js",
@@ -54,7 +54,7 @@
   "license": "GPL-3.0",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/boybook/wsjtx-lib-nodejs.git"
+    "url": "git+https://github.com/boybook/wsjtx_lib_nodejs.git"
   },
   "dependencies": {
     "node-addon-api": "^8.3.1",
