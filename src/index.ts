@@ -1,5 +1,5 @@
 /**
- * wsjtx-lib — Node.js binding for the WSJT-X 3.0.0 backend.
+ * wsjtx-lib — Node.js binding for the WSJT-X 3.0.2 backend.
  *
  * Public surface:
  *   - WSJTXLib.encode(mode, message, frequency)

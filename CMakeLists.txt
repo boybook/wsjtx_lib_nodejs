@@ -8,6 +8,11 @@ cmake_minimum_required(VERSION 3.15)
 # ============================================================================
 option(WSJTX_BUILD_CORE_ONLY "Build only wsjtx_core shared library" OFF)
 option(WSJTX_BUILD_NODE_ONLY "Build only .node module (requires pre-built wsjtx_core)" OFF)
+option(WSJTX_BUILD_TESTS "Build wsjtx_lib unit tests" OFF)
+
+if(WSJTX_BUILD_TESTS)
+    enable_testing()
+endif()
 
 # Disable vcpkg manifest mode if detected
 if(DEFINED CMAKE_TOOLCHAIN_FILE AND CMAKE_TOOLCHAIN_FILE MATCHES "vcpkg")

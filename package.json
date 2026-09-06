@@ -1,6 +1,6 @@
 {
   "name": "wsjtx-lib",
-  "version": "2.1.3",
+  "version": "2.1.4",
   "description": "Node.js C++ extension for WSJTX digital radio protocol library",
   "type": "module",
   "main": "dist/src/index.js",
@@ -30,6 +30,7 @@
     "clean": "cmake-js clean && rimraf dist",
     "test": "node --test dist/test/wsjtx.basic.test.js",
     "test:full": "node --test dist/test/wsjtx.test.js",
+    "test:native-hash": "cmake -S . -B build -DWSJTX_BUILD_TESTS=ON && cmake --build build --config Release --target test_packjt77_hash_vectors && ctest --test-dir build --output-on-failure -R '^packjt77_hash_vectors$'",
     "prepare": "npm run build:ts",
     "package": "node scripts/package-prebuilds.js",
     "prepublishOnly": "npm run build:ts"
