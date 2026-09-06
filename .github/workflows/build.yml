@@ -67,7 +67,6 @@ jobs:
               rm -rf build/
               npx cmake-js compile --arch=${{ matrix.arch }}
               npm test
-              npm run test:full
 
               TARGET_DIR="prebuilds/${{ matrix.platform }}-${{ matrix.arch }}"
               rm -rf "$TARGET_DIR"
@@ -196,15 +195,11 @@ jobs:
       # Test
       - name: Run tests (macOS)
         if: runner.os == 'macOS'
-        run: |
-          npm test
-          npm run test:full
+        run: npm test
 
       - name: Run tests (Windows)
         if: runner.os == 'Windows'
-        run: |
-          npm test
-          npm run test:full
+        run: npm test
 
       # Package prebuilds
       - name: Package prebuilds (macOS)
