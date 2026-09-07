@@ -270,6 +270,111 @@ describe('WSJTX library — regression', () => {
       assert.ok(Array.isArray(result.messages));
     });
 
+    it('continues decoding low-gain audio above the WSJT-X RMS gate', async () => {
+      // This level produces an Int16 RMS between 0.5 and 3.0. The official
+      // decoder still attempts the frame; the old library gate discarded it.
+      const lowGainAudio = Float32Array.from(encoded.audioData, (sample) => sample * 0.0001);
+      const result = await lib.decode(WSJTXMode.FT8, lowGainAudio, {
+        frequency: 1500,
+        threads: 1,
+        decodeDepth: 1,
+      });
+
+      assert.ok((result.stats?.candidateCount ?? 0) > 0);
+      assert.ok(result.messages.some((message) => message.text.includes('CQ TEST K1ABC FN20')));
+    });
+
+    it('keeps FT8 decoder state across explicit 41/47/50 stages at every depth', async () => {
+      const int16Audio = toInt16(encoded.audioData);
+      for (const decodeDepth of [1, 2, 3] as const) {
+        const session = lib.beginDecodeSession({
+          sessionId: `roundtrip-${decodeDepth}`,
+          mode: WSJTXMode.FT8,
+          decodeDepth,
+          slotUtc: 120000,
+        });
+        const stage41 = await session.decodeStage(int16Audio, 41, { frequency: 1500, threads: 1 });
+        const stage47 = await session.decodeStage(int16Audio, 47, { frequency: 1500, threads: 1 });
+        const stage50 = await session.decodeStage(int16Audio, 50, { frequency: 1500, threads: 1 });
+        const summary = session.endDecodeSession();
+
+        assert.deepStrictEqual([stage41.stage, stage47.stage, stage50.stage], [41, 47, 50]);
+        assert.strictEqual(stage41.decodeDepth, decodeDepth);
+        assert.strictEqual(stage47.decodeDepth, decodeDepth);
+        assert.strictEqual(stage50.decodeDepth, decodeDepth);
+        assert.ok(summary.messages.some((message) => message.text.includes('CQ TEST K1ABC FN20')));
+        assert.strictEqual(summary.stages.length, 3);
+      }
+    });
+
+    it('serializes concurrent native sessions without mixing their results', async () => {
+      const int16Audio = toInt16(encoded.audioData);
+      const [fast, deep] = await Promise.all([
+        lib.decode(WSJTXMode.FT8, int16Audio, {
+          frequency: 1500,
+          threads: 1,
+          decodeDepth: 1,
+          sessionId: 'concurrent-fast',
+          stageSymbols: 50,
+          slotUtc: 120001,
+          resetSession: true,
+        }),
+        lib.decode(WSJTXMode.FT8, int16Audio, {
+          frequency: 1500,
+          threads: 1,
+          decodeDepth: 3,
+          sessionId: 'concurrent-deep',
+          stageSymbols: 50,
+          slotUtc: 120002,
+          resetSession: true,
+        }),
+      ]);
+
+      assert.strictEqual(fast.decodeDepth, 1);
+      assert.strictEqual(deep.decodeDepth, 3);
+      assert.strictEqual(fast.stage, 50);
+      assert.strictEqual(deep.stage, 50);
+      assert.ok(fast.messages.some((message) => message.text.includes('CQ TEST K1ABC FN20')));
+      assert.ok(deep.messages.some((message) => message.text.includes('CQ TEST K1ABC FN20')));
+      lib.endDecodeSession('concurrent-fast');
+      lib.endDecodeSession('concurrent-deep');
+    });
+
+    it('decodes the same known FT8 frame through Float32 and Int16 paths', async () => {
+      const int16Audio = toInt16(encoded.audioData);
+      const floatResult = await lib.decode(WSJTXMode.FT8, encoded.audioData, {
+        frequency: 1500,
+        threads: 1,
+        decodeDepth: 1,
+      });
+      const int16Result = await lib.decode(WSJTXMode.FT8, int16Audio, {
+        frequency: 1500,
+        threads: 1,
+        decodeDepth: 1,
+      });
+      assert.ok(floatResult.messages.some((message) => message.text.includes('CQ TEST K1ABC FN20')));
+      assert.ok(int16Result.messages.some((message) => message.text.includes('CQ TEST K1ABC FN20')));
+    });
+
+    it('rejects a decreasing stage and skips a duplicate stage', async () => {
+      const session = lib.beginDecodeSession({
+        sessionId: 'stage-order',
+        mode: WSJTXMode.FT8,
+        decodeDepth: 3,
+        slotUtc: 120000,
+      });
+      const audio = toInt16(encoded.audioData);
+      await session.decodeStage(audio, 41, { frequency: 1500, threads: 1 });
+      const duplicate = await session.decodeStage(audio, 41, { frequency: 1500, threads: 1 });
+      assert.strictEqual(duplicate.skipped, true);
+      await session.decodeStage(audio, 47, { frequency: 1500, threads: 1 });
+      await assert.rejects(
+        () => session.decodeStage(audio, 41, { frequency: 1500, threads: 1 }),
+        /monotonic/,
+      );
+      session.endDecodeSession();
+    });
+
     it('48 kHz opt-in encoded audio still decodes structurally', async () => {
       runIsolatedNode(`
         import { WSJTXLib, WSJTXMode } from './src/index.js';

@@ -17,6 +17,8 @@ export enum WSJTXMode {
 
 export type AudioData = Float32Array | Int16Array;
 
+export type WSJTXDecodeStage = 41 | 47 | 49 | 50 | 'ft4-partial' | 'ft4-final';
+
 export interface WSJTXTime {
   hour: number;
   minute: number;
@@ -61,12 +63,58 @@ export interface DecodeOptions {
   apDecode?: boolean;
   decodeDepth?: number;
   qsoProgress?: number;
+  /** Internal/session stage. Omit for the compatible one-shot final decode. */
+  stageSymbols?: number;
+  /** Session identifier used to preserve WSJT-X state across stages. */
+  sessionId?: string;
+  /** Slot UTC as HHMMSS, used instead of the process clock for staged decode. */
+  slotUtc?: number;
+  /** Force a fresh stage state when starting a session. */
+  resetSession?: boolean;
+  /** WSJT-X targeted re-decode mode. */
+  nagain?: boolean;
+  /** EME delay compensation in milliseconds. */
+  emeDelayMs?: number;
 }
 
 export interface DecodeResult {
   success: boolean;
   messages: WSJTXMessage[];
   error?: string;
+  processingTimeMs?: number;
+  stage?: WSJTXDecodeStage;
+  decodeDepth?: number;
+  stats?: DecodeStats;
+}
+
+export interface DecodeStats {
+  stageSymbols: number;
+  candidateCount: number;
+  decodedCount: number;
+  averageCount: number;
+}
+
+export interface DecodeSessionOptions {
+  sessionId: string;
+  mode: WSJTXMode;
+  slotUtc?: number;
+  decodeDepth: 1 | 2 | 3;
+}
+
+export interface DecodeStageResult extends DecodeResult {
+  stage: WSJTXDecodeStage;
+  newMessages: WSJTXMessage[];
+  allMessages: WSJTXMessage[];
+  skipped?: boolean;
+  skipReason?: 'duplicate-stage';
+}
+
+export interface DecodeSessionSummary {
+  sessionId: string;
+  mode: WSJTXMode;
+  decodeDepth: 1 | 2 | 3;
+  messages: WSJTXMessage[];
+  stages: WSJTXDecodeStage[];
 }
 
 export interface EncodeResult {

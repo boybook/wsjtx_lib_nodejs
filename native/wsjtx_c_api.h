@@ -105,7 +105,7 @@ typedef struct {
  * - hiscall:   DX callsign for AP decode (empty = none)
  * - hisgrid:   DX 4-char grid for AP decode (empty = none)
  * - ap_decode: enable AP decode passes (default 1)
- * - decode_depth: WSJT-X decode depth (default 1)
+ * - decode_depth: WSJT-X decode depth (1..3; legacy one-shot default 1)
  * - qso_progress: WSJT-X QSO progress stage (default 0)
  */
 typedef struct {
@@ -122,7 +122,23 @@ typedef struct {
     char mygrid[7];
     char hiscall[13];
     char hisgrid[7];
+    int stage_symbols;
+    int slot_utc;
+    int reset_session;
+    int nagain;
+    int eme_delay_ms;
+    char session_id[64];
 } wsjtx_decode_options_t;
+
+/* Per-stage decoder counters. These counters describe the native invocation;
+ * decoded_count is cumulative for staged FT8 calls, matching WSJT-X's live
+ * decoder bookkeeping. */
+typedef struct {
+    int stage_symbols;
+    int candidate_count;
+    int decoded_count;
+    int average_count;
+} wsjtx_decode_stats_t;
 
 /* ---- Lifecycle ---- */
 
@@ -163,6 +179,22 @@ WSJTX_API int wsjtx_decode_float_v2(wsjtx_handle_t handle, int mode,
 WSJTX_API int wsjtx_decode_int16_v2(wsjtx_handle_t handle, int mode,
     const int16_t* samples, int num_samples,
     const wsjtx_decode_options_t* options);
+
+/* Serialized variants drain messages before releasing the decoder lock. */
+WSJTX_API int wsjtx_decode_float_v3(wsjtx_handle_t handle, int mode,
+    const float* samples, int num_samples,
+    const wsjtx_decode_options_t* options,
+    wsjtx_message_t* out_messages, int max_messages, int* out_num_messages,
+    wsjtx_decode_stats_t* out_stats);
+
+WSJTX_API int wsjtx_decode_int16_v3(wsjtx_handle_t handle, int mode,
+    const int16_t* samples, int num_samples,
+    const wsjtx_decode_options_t* options,
+    wsjtx_message_t* out_messages, int max_messages, int* out_num_messages,
+    wsjtx_decode_stats_t* out_stats);
+
+WSJTX_API int wsjtx_end_decode_session(wsjtx_handle_t handle, const char* session_id);
+WSJTX_API int wsjtx_get_last_decode_stats(wsjtx_handle_t handle, wsjtx_decode_stats_t* stats);
 
 /* ---- Encode ---- */
 

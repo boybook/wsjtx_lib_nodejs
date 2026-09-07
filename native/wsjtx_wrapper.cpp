@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <chrono>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -25,7 +26,8 @@ namespace wsjtx_nodejs
             InstanceMethod("isDecodingSupported", &WSJTXLibWrapper::IsDecodingSupported),
             InstanceMethod("getSampleRate", &WSJTXLibWrapper::GetSampleRate),
             InstanceMethod("getTransmissionDuration", &WSJTXLibWrapper::GetTransmissionDuration),
-            InstanceMethod("convertAudioFormat", &WSJTXLibWrapper::ConvertAudioFormat)
+            InstanceMethod("convertAudioFormat", &WSJTXLibWrapper::ConvertAudioFormat),
+            InstanceMethod("endDecodeSession", &WSJTXLibWrapper::EndDecodeSession)
         });
 
         exports.Set("WSJTXLib", func);
@@ -94,6 +96,12 @@ namespace wsjtx_nodejs
         opts.ap_decode = optObj.Has("apDecode") ? (optObj.Get("apDecode").As<Napi::Boolean>().Value() ? 1 : 0) : 1;
         opts.decode_depth = optObj.Has("decodeDepth") ? optObj.Get("decodeDepth").As<Napi::Number>().Int32Value() : 1;
         opts.qso_progress = optObj.Has("qsoProgress") ? optObj.Get("qsoProgress").As<Napi::Number>().Int32Value() : 0;
+        opts.stage_symbols = optObj.Has("stageSymbols") ? optObj.Get("stageSymbols").As<Napi::Number>().Int32Value() : 50;
+        opts.slot_utc = optObj.Has("slotUtc") ? optObj.Get("slotUtc").As<Napi::Number>().Int32Value() : -1;
+        opts.reset_session = optObj.Has("resetSession") && optObj.Get("resetSession").As<Napi::Boolean>().Value() ? 1 : 0;
+        opts.nagain = optObj.Has("nagain") && optObj.Get("nagain").As<Napi::Boolean>().Value() ? 1 : 0;
+        opts.eme_delay_ms = optObj.Has("emeDelayMs") ? optObj.Get("emeDelayMs").As<Napi::Number>().Int32Value() : 0;
+        if (optObj.Has("sessionId")) { auto s = optObj.Get("sessionId").As<Napi::String>().Utf8Value(); strncpy(opts.session_id, s.c_str(), sizeof(opts.session_id) - 1); }
         if (optObj.Has("myCall")) { auto s = optObj.Get("myCall").As<Napi::String>().Utf8Value(); strncpy(opts.mycall, s.c_str(), 12); }
         if (optObj.Has("myGrid")) { auto s = optObj.Get("myGrid").As<Napi::String>().Utf8Value(); strncpy(opts.mygrid, s.c_str(), 6); }
         if (optObj.Has("dxCall")) { auto s = optObj.Get("dxCall").As<Napi::String>().Utf8Value(); strncpy(opts.hiscall, s.c_str(), 12); }
@@ -346,6 +354,18 @@ namespace wsjtx_nodejs
         return env.Undefined();
     }
 
+    Napi::Value WSJTXLibWrapper::EndDecodeSession(const Napi::CallbackInfo& info)
+    {
+        Napi::Env env = info.Env();
+        if (info.Length() < 1 || !info[0].IsString()) {
+            Napi::TypeError::New(env, "Expected session id").ThrowAsJavaScriptException();
+            return env.Null();
+        }
+        const auto sessionId = info[0].As<Napi::String>().Utf8Value();
+        const int rc = wsjtx_end_decode_session(handle_, sessionId.c_str());
+        return Napi::Boolean::New(env, rc == WSJTX_OK);
+    }
+
     // ---- Helpers ----
 
     void WSJTXLibWrapper::ValidateMode(Napi::Env env, int mode) {
@@ -419,23 +439,28 @@ namespace wsjtx_nodejs
 
     void DecodeWorker::Execute()
     {
+        const auto started = std::chrono::steady_clock::now();
         int rc;
+        messages_.resize(MAX_MSGS);
+        int outputMessages = 0;
         if (useFloat_) {
-            rc = wsjtx_decode_float_v2(handle_, mode_,
+            rc = wsjtx_decode_float_v3(handle_, mode_,
                 floatData_.data(), static_cast<int>(floatData_.size()),
-                &options_);
+                &options_, messages_.data(), MAX_MSGS, &outputMessages, &stats_);
         } else {
-            rc = wsjtx_decode_int16_v2(handle_, mode_,
+            rc = wsjtx_decode_int16_v3(handle_, mode_,
                 reinterpret_cast<int16_t*>(intData_.data()),
                 static_cast<int>(intData_.size()),
-                &options_);
+                &options_, messages_.data(), MAX_MSGS, &outputMessages, &stats_);
         }
         if (rc == WSJTX_OK) {
-            messages_.resize(MAX_MSGS);
-            numMessages_ = wsjtx_pull_messages(handle_, messages_.data(), MAX_MSGS);
+            numMessages_ = outputMessages;
         } else {
+            messages_.clear();
             SetError("Decode failed with error code " + std::to_string(rc));
         }
+        processingTimeMs_ = std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - started).count();
     }
 
     void DecodeWorker::OnOK()
@@ -455,6 +480,13 @@ namespace wsjtx_nodejs
         auto result = Napi::Object::New(env);
         result.Set("messages", msgs);
         result.Set("success", Napi::Boolean::New(env, true));
+        result.Set("processingTimeMs", Napi::Number::New(env, processingTimeMs_));
+        auto stats = Napi::Object::New(env);
+        stats.Set("stageSymbols", Napi::Number::New(env, stats_.stage_symbols));
+        stats.Set("candidateCount", Napi::Number::New(env, stats_.candidate_count));
+        stats.Set("decodedCount", Napi::Number::New(env, stats_.decoded_count));
+        stats.Set("averageCount", Napi::Number::New(env, stats_.average_count));
+        result.Set("stats", stats);
         Callback().Call({env.Null(), result});
     }
 

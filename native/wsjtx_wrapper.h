@@ -27,6 +27,7 @@ private:
     Napi::Value GetSampleRate(const Napi::CallbackInfo& info);
     Napi::Value GetTransmissionDuration(const Napi::CallbackInfo& info);
     Napi::Value ConvertAudioFormat(const Napi::CallbackInfo& info);
+    Napi::Value EndDecodeSession(const Napi::CallbackInfo& info);
 
     Napi::Object CreateMessageObject(Napi::Env env, const wsjtx_message_t& msg);
 
@@ -67,6 +68,8 @@ private:
     static constexpr int MAX_MSGS = 200;
     int mode_; std::vector<float> floatData_; std::vector<short int> intData_; bool useFloat_;
     wsjtx_decode_options_t options_; std::vector<wsjtx_message_t> messages_; int numMessages_ = 0;
+    wsjtx_decode_stats_t stats_{};
+    double processingTimeMs_ = 0;
 };
 
 /**

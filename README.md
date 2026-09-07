@@ -191,6 +191,30 @@ Decode digital radio signals from audio data.
 
 **Note:** For optimal FT8 decoding, audio may need resampling. See examples for details.
 
+##### `beginDecodeSession(options): WSJTXDecodeSession`
+
+Use one session for the live FT8 windows so the native decoder can retain its
+subtraction, OSD, and AP state. `decodeDepth` is explicitly `1` (Fast), `2`
+(Normal), or `3` (Deep); the application default is `3` and is kept unchanged
+for every stage.
+
+```typescript
+const session = lib.beginDecodeSession({
+  sessionId: 'ft8-slot-123',
+  mode: WSJTXMode.FT8,
+  decodeDepth: 3,
+  slotUtc: 123045,
+});
+await session.decodeStage(audio, 41, { frequency: 1500 });
+await session.decodeStage(audio, 47, { frequency: 1500 });
+const final = await session.decodeStage(audio, 50, { frequency: 1500 });
+const summary = session.endDecodeSession();
+```
+
+Supported FT8 stages are 41, 47, 49, and 50. Repeating a stage is skipped and
+returns no new messages. Each stage result includes native timing and decoder
+statistics for observation.
+
 ##### `encode(mode, message, frequency, threads?): Promise<EncodeResult>`
 
 Encode a message into audio waveform for transmission.

@@ -12,6 +12,8 @@
 #include <vector>
 #include <complex>
 #include <string>
+#include <utility>
+#include <algorithm>
 
 /* Mode metadata table (mirrors wsjtx_wrapper.cpp MODE_INFO) */
 struct ModeMetadata {
@@ -44,21 +46,56 @@ static inline wsjtx_lib* to_lib(wsjtx_handle_t h) {
     return static_cast<wsjtx_lib*>(h);
 }
 
-/* Apply v2 decode options onto the lib instance.
- * Station fields are always applied so consecutive decodes do not reuse
- * stale AP context from a previous request. */
-static void apply_decode_options(wsjtx_lib* lib, const wsjtx_decode_options_t* opts) {
-    lib->setDecodeStationInfo(
-        std::string(opts->mycall),
-        std::string(opts->mygrid),
-        std::string(opts->hiscall),
-        std::string(opts->hisgrid));
-    lib->setDecodeRange(opts->low_freq, opts->high_freq, opts->tolerance);
-    lib->setDecodeControls(
-        opts->ap_decode != 0,
-        opts->decode_depth,
-        opts->tx_frequency,
-        opts->qso_progress);
+extern "C" void wsjtx_decode_stats_(int *stage, int *candidates, int *decoded, int *average);
+
+/* Convert the C ABI options into one atomic C++ invocation configuration.
+ * Keeping this as a value object lets wsjtx_lib apply the complete request
+ * while holding its decoder mutex, so concurrent N-API workers cannot mix
+ * station/range/depth/session fields between calls. */
+static WsjtxDecodeConfig make_decode_config(const wsjtx_decode_options_t* opts) {
+    WsjtxDecodeConfig config;
+    config.low_freq = opts->low_freq;
+    config.high_freq = opts->high_freq;
+    config.tolerance = opts->tolerance;
+    config.ap_decode = opts->ap_decode != 0;
+    config.decode_depth = opts->decode_depth;
+    config.tx_frequency = opts->tx_frequency;
+    config.qso_progress = opts->qso_progress;
+    config.my_call = std::string(opts->mycall);
+    config.my_grid = std::string(opts->mygrid);
+    config.dx_call = std::string(opts->hiscall);
+    config.dx_grid = std::string(opts->hisgrid);
+    wsjtx_decode_stage_t stage{};
+    stage.stage_symbols = opts->stage_symbols > 0 ? opts->stage_symbols : 50;
+    stage.slot_utc = opts->slot_utc;
+    stage.reset_state = opts->reset_session != 0;
+    stage.nagain = opts->nagain != 0;
+    stage.eme_delay_ms = opts->eme_delay_ms;
+    stage.session_id = opts->session_id;
+    config.stage = std::move(stage);
+    return config;
+}
+
+static void copy_message(wsjtx_message_t* dst, const WsjtxMessage& src);
+
+static void copy_stats(wsjtx_decode_stats_t* output) {
+    if (!output) return;
+    const auto stats = wsjtx_last_stats();
+    output->stage_symbols = stats.stage_symbols;
+    output->candidate_count = stats.candidate_count;
+    output->decoded_count = stats.decoded_count;
+    output->average_count = stats.average_count;
+}
+
+static int copy_messages(const std::vector<WsjtxMessage>& messages,
+    wsjtx_message_t* out_messages, int max_messages, int* out_num_messages) {
+    if (!out_num_messages || max_messages < 0 || (max_messages > 0 && !out_messages)) {
+        return WSJTX_ERR_BUFFER_TOO_SMALL;
+    }
+    const int count = std::min(static_cast<int>(messages.size()), max_messages);
+    for (int i = 0; i < count; i++) copy_message(&out_messages[i], messages[i]);
+    *out_num_messages = count;
+    return WSJTX_OK;
 }
 
 /* ---- Lifecycle ---- */
@@ -118,9 +155,9 @@ WSJTX_API int wsjtx_decode_float_v2(wsjtx_handle_t handle, int mode,
 
     try {
         wsjtx_lib* lib = to_lib(handle);
-        apply_decode_options(lib, options);
+        auto config = make_decode_config(options);
         std::vector<float> data(samples, samples + num_samples);
-        lib->decode(static_cast<wsjtxMode>(mode), data, options->frequency, options->threads);
+        lib->decodeWithOptions(static_cast<wsjtxMode>(mode), data, options->frequency, options->threads, config);
         return WSJTX_OK;
     } catch (...) {
         return WSJTX_ERR_EXCEPTION;
@@ -136,13 +173,71 @@ WSJTX_API int wsjtx_decode_int16_v2(wsjtx_handle_t handle, int mode,
 
     try {
         wsjtx_lib* lib = to_lib(handle);
-        apply_decode_options(lib, options);
+        auto config = make_decode_config(options);
         std::vector<short int> data(samples, samples + num_samples);
-        lib->decode(static_cast<wsjtxMode>(mode), data, options->frequency, options->threads);
+        lib->decodeWithOptions(static_cast<wsjtxMode>(mode), data, options->frequency, options->threads, config);
         return WSJTX_OK;
     } catch (...) {
         return WSJTX_ERR_EXCEPTION;
     }
+}
+
+WSJTX_API int wsjtx_decode_float_v3(wsjtx_handle_t handle, int mode,
+    const float* samples, int num_samples, const wsjtx_decode_options_t* options,
+    wsjtx_message_t* out_messages, int max_messages, int* out_num_messages,
+    wsjtx_decode_stats_t* out_stats)
+{
+    if (!handle || !options) return WSJTX_ERR_INVALID_HANDLE;
+    if (!valid_mode(mode)) return WSJTX_ERR_INVALID_MODE;
+    try {
+        auto config = make_decode_config(options);
+        std::vector<float> data(samples, samples + num_samples);
+        std::vector<WsjtxMessage> messages;
+        to_lib(handle)->decodeWithOptionsAndPull(static_cast<wsjtxMode>(mode), data, options->frequency, options->threads, config, messages);
+        copy_stats(out_stats);
+        return copy_messages(messages, out_messages, max_messages, out_num_messages);
+    } catch (...) {
+        return WSJTX_ERR_EXCEPTION;
+    }
+}
+
+WSJTX_API int wsjtx_decode_int16_v3(wsjtx_handle_t handle, int mode,
+    const int16_t* samples, int num_samples, const wsjtx_decode_options_t* options,
+    wsjtx_message_t* out_messages, int max_messages, int* out_num_messages,
+    wsjtx_decode_stats_t* out_stats)
+{
+    if (!handle || !options) return WSJTX_ERR_INVALID_HANDLE;
+    if (!valid_mode(mode)) return WSJTX_ERR_INVALID_MODE;
+    try {
+        auto config = make_decode_config(options);
+        std::vector<short int> data(samples, samples + num_samples);
+        std::vector<WsjtxMessage> messages;
+        to_lib(handle)->decodeWithOptionsAndPull(static_cast<wsjtxMode>(mode), data, options->frequency, options->threads, config, messages);
+        copy_stats(out_stats);
+        return copy_messages(messages, out_messages, max_messages, out_num_messages);
+    } catch (...) {
+        return WSJTX_ERR_EXCEPTION;
+    }
+}
+
+WSJTX_API int wsjtx_end_decode_session(wsjtx_handle_t handle, const char* session_id) {
+    if (!handle) return WSJTX_ERR_INVALID_HANDLE;
+    try {
+        to_lib(handle)->endDecodeSession(session_id ? std::string(session_id) : std::string{});
+        return WSJTX_OK;
+    } catch (...) {
+        return WSJTX_ERR_EXCEPTION;
+    }
+}
+
+WSJTX_API int wsjtx_get_last_decode_stats(wsjtx_handle_t handle, wsjtx_decode_stats_t* stats) {
+    if (!handle || !stats) return WSJTX_ERR_INVALID_HANDLE;
+    const auto last = wsjtx_last_stats();
+    stats->stage_symbols = last.stage_symbols;
+    stats->candidate_count = last.candidate_count;
+    stats->decoded_count = last.decoded_count;
+    stats->average_count = last.average_count;
+    return WSJTX_OK;
 }
 
 /* ---- Encode ---- */

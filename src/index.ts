@@ -21,6 +21,10 @@ import {
   type WSJTXConfig,
   type ModeCapabilities,
   type DecodeOptions,
+  type DecodeSessionOptions,
+  type DecodeStageResult,
+  type DecodeSessionSummary,
+  type WSJTXDecodeStage,
 } from './types.js';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
@@ -47,6 +51,12 @@ interface NativeDecodeOptions {
   apDecode: boolean;
   decodeDepth: number;
   qsoProgress: number;
+  stageSymbols?: number;
+  slotUtc?: number;
+  resetSession?: boolean;
+  nagain?: boolean;
+  emeDelayMs?: number;
+  sessionId?: string;
 }
 
 interface NativeWSJTXLib {
@@ -59,6 +69,7 @@ interface NativeWSJTXLib {
   getSampleRate(mode: number): number;
   getTransmissionDuration(mode: number): number;
   convertAudioFormat(audio: AudioData, target: 'float32' | 'int16', cb: (e: Error | null, r: AudioData) => void): void;
+  endDecodeSession(sessionId: string): boolean;
 }
 
 function loadNativeBinding(): NativeBinding['WSJTXLib'] {
@@ -97,6 +108,13 @@ export class WSJTXLib {
     this.validateMode(mode);
     this.validateAudio(audioData);
     this.validateFrequency(options.frequency);
+    if (options.decodeDepth !== undefined
+      && (!Number.isInteger(options.decodeDepth) || options.decodeDepth < 1 || options.decodeDepth > 3)) {
+      throw new WSJTXError('decodeDepth must be 1, 2, or 3', 'INVALID');
+    }
+    if (options.stageSymbols !== undefined && ![41, 47, 49, 50].includes(options.stageSymbols)) {
+      throw new WSJTXError('stageSymbols must be 41, 47, 49, or 50', 'INVALID');
+    }
     if (!this.isDecodingSupported(mode)) {
       throw new WSJTXError('Decoding not supported for this mode', 'UNSUPPORTED');
     }
@@ -115,14 +133,44 @@ export class WSJTXLib {
       apDecode: options.apDecode ?? true,
       decodeDepth: options.decodeDepth ?? 1,
       qsoProgress: options.qsoProgress ?? 0,
+      ...(options.stageSymbols !== undefined ? { stageSymbols: options.stageSymbols } : {}),
+      ...(options.slotUtc !== undefined ? { slotUtc: options.slotUtc } : {}),
+      ...(options.resetSession !== undefined ? { resetSession: options.resetSession } : {}),
+      ...(options.nagain !== undefined ? { nagain: options.nagain } : {}),
+      ...(options.emeDelayMs !== undefined ? { emeDelayMs: options.emeDelayMs } : {}),
+      ...(options.sessionId !== undefined ? { sessionId: options.sessionId } : {}),
     };
 
     return new Promise((resolve, reject) => {
       this.native.decode(mode, audioData, opts, (err, result) => {
         if (err) reject(new WSJTXError(err.message, 'DECODE_ERROR'));
-        else resolve(result);
+        else resolve({
+          ...result,
+          ...(options.stageSymbols !== undefined ? { stage: options.stageSymbols as WSJTXDecodeStage } : {}),
+          ...(options.decodeDepth !== undefined ? { decodeDepth: options.decodeDepth } : {}),
+        });
       });
     });
+  }
+
+  beginDecodeSession(options: DecodeSessionOptions): WSJTXDecodeSession {
+    this.validateMode(options.mode);
+    if (options.mode !== WSJTXMode.FT8 && options.mode !== WSJTXMode.FT4) {
+      throw new WSJTXError('Staged decode is supported for FT8 and FT4 only', 'UNSUPPORTED');
+    }
+    if (!Number.isInteger(options.decodeDepth) || options.decodeDepth < 1 || options.decodeDepth > 3) {
+      throw new WSJTXError('decodeDepth must be 1, 2, or 3', 'INVALID');
+    }
+    if (!options.sessionId || options.sessionId.length > 63) {
+      throw new WSJTXError('sessionId must be 1..63 characters', 'INVALID');
+    }
+    return new WSJTXDecodeSession(this, options);
+  }
+
+  endDecodeSession(sessionId: string): void {
+    if (!this.native.endDecodeSession(sessionId)) {
+      throw new WSJTXError('Failed to end decode session', 'DECODE_ERROR');
+    }
   }
 
   async encode(
@@ -249,6 +297,84 @@ export class WSJTXLib {
   }
 }
 
+export class WSJTXDecodeSession {
+  private ended = false;
+  private firstStage = true;
+  private readonly stages: WSJTXDecodeStage[] = [];
+  private readonly messages: WSJTXMessage[] = [];
+  private readonly messageKeys = new Set<string>();
+
+  constructor(private readonly owner: WSJTXLib, private readonly options: DecodeSessionOptions) {}
+
+  /** Returns true when a scheduler retry repeats the latest numeric stage. */
+  isStageDuplicate(stage: WSJTXDecodeStage): boolean {
+    const previous = this.stages.at(-1);
+    return typeof stage === 'number' && typeof previous === 'number' && stage === previous;
+  }
+
+  async decodeStage(
+    audioData: AudioData,
+    stage: WSJTXDecodeStage,
+    options: Partial<Pick<DecodeOptions, 'frequency'>> & Omit<DecodeOptions, 'frequency' | 'sessionId' | 'stageSymbols' | 'slotUtc' | 'decodeDepth'> = {},
+  ): Promise<DecodeStageResult> {
+    if (this.ended) throw new WSJTXError('Decode session has ended', 'INVALID');
+    const stageSymbols = typeof stage === 'number' ? stage : 50;
+    if (this.options.mode === WSJTXMode.FT8 && ![41, 47, 49, 50].includes(stageSymbols)) {
+      throw new WSJTXError('FT8 stage must be 41, 47, 49, or 50', 'INVALID');
+    }
+    const previousStage = this.stages.at(-1);
+    if (typeof stage === 'number' && typeof previousStage === 'number') {
+      if (stage < previousStage) throw new WSJTXError('Decode stages must be monotonic', 'INVALID');
+      if (stage === previousStage) {
+        return {
+          success: true,
+          messages: [],
+          stage,
+          decodeDepth: this.options.decodeDepth,
+          newMessages: [],
+          allMessages: [...this.messages],
+          skipped: true,
+          skipReason: 'duplicate-stage',
+        };
+      }
+    }
+    const decodeOptions: DecodeOptions = {
+      ...options,
+      frequency: options.frequency ?? 0,
+      decodeDepth: this.options.decodeDepth,
+      sessionId: this.options.sessionId,
+      stageSymbols,
+      resetSession: this.firstStage,
+    };
+    if (this.options.slotUtc !== undefined) decodeOptions.slotUtc = this.options.slotUtc;
+    const result = await this.owner.decode(this.options.mode, audioData, decodeOptions);
+    this.firstStage = false;
+    this.stages.push(stage);
+    const newMessages = result.messages.filter((message) => {
+      const key = `${message.text.trim()}|${message.deltaFrequency}|${message.deltaTime.toFixed(3)}`;
+      if (this.messageKeys.has(key)) return false;
+      this.messageKeys.add(key);
+      this.messages.push(message);
+      return true;
+    });
+    return { ...result, stage, newMessages, allMessages: [...this.messages] };
+  }
+
+  endDecodeSession(): DecodeSessionSummary {
+    if (!this.ended) {
+      this.owner.endDecodeSession(this.options.sessionId);
+      this.ended = true;
+    }
+    return {
+      sessionId: this.options.sessionId,
+      mode: this.options.mode,
+      decodeDepth: this.options.decodeDepth,
+      messages: [...this.messages],
+      stages: [...this.stages],
+    };
+  }
+}
+
 export { WSJTXMode, WSJTXError };
 export type {
   DecodeResult,
@@ -259,5 +385,9 @@ export type {
   AudioData,
   WSJTXConfig,
   DecodeOptions,
+  DecodeSessionOptions,
+  DecodeStageResult,
+  DecodeSessionSummary,
+  WSJTXDecodeStage,
   ModeCapabilities,
 };
